@@ -11,7 +11,7 @@ from transformers import AutoTokenizer
 from huggingface_hub import InferenceClient
 import time
 
-
+#! Must solve for strong coupling to pickled symbol data.
 class SentimentAnalysis:
     def __init__(self, symbols: Dict[str, pd.DataFrame]= None):
         if symbols is None:
