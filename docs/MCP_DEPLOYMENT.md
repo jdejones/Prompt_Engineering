@@ -7,13 +7,16 @@ This guide walks through the MCP server that was added in this repo and how to d
 - Read-only MCP server in `mcp_news_server/` with tools:
   - `health`
   - `list_symbols`
+  - `select_schema_tables`
+  - `describe_table`
+  - `query_table`
   - `get_symbol_news`
   - `search`
   - `fetch`
 - Query safety controls:
   - symbol whitelist from `information_schema.tables`
   - parameterized SQL values for filters/search
-  - max row limits and max symbol scan limits
+  - max row limits (`MCP_MAX_ROWS`) and max symbol scan limits (`MCP_MAX_SCAN_SYMBOLS`)
 - OAuth resource server support:
   - JWT verification via JWKS (`AUTH_JWKS_URI`)
   - issuer/audience/scope checks
@@ -161,10 +164,42 @@ python -m mcp_news_server
 Server env keys that must exist:
 
 - `MYSQL_PASSWORD`
+
+When `MCP_AUTH_ENABLED=1`, these must also be set:
+
 - `MCP_BASE_URL`
 - `AUTH_ISSUER_URL`
 
-## 7) Connect in ChatGPT (agents/apps)
+## 7) (Optional) Expose your local server with a free ngrok URL (quick + temporary)
+
+This is useful for quick local demos or temporary testing without deploying to a VPS. The URL is ephemeral on the free plan (it changes each time you restart ngrok), so it's not recommended for anything long-lived.
+
+1. Install ngrok (Windows examples):
+   - `winget install ngrok.ngrok`
+   - or `choco install ngrok`
+2. Authenticate (ngrok requires an account/authtoken even on the free plan):
+
+```powershell
+ngrok config add-authtoken <your-ngrok-authtoken>
+```
+
+3. Start the MCP server locally (defaults to port 8000):
+
+```bash
+python -m mcp_news_server
+```
+
+4. In a second terminal, start an HTTPS tunnel to your local server:
+
+```powershell
+ngrok http 8000
+```
+
+5. Copy the **Forwarding** HTTPS URL ngrok prints (for example `https://xxxx.ngrok-free.app`).
+   - Your MCP endpoint will typically be: `https://xxxx.ngrok-free.app/mcp`
+   - If you enable OAuth (`MCP_AUTH_ENABLED=1`), set `MCP_BASE_URL` to that full public MCP URL (and keep in mind you’ll need to update OAuth audience/config each time the free ngrok URL changes).
+
+## 8) Connect in ChatGPT (agents/apps)
 
 1. Open ChatGPT settings for apps/connectors (developer mode).
 2. Add your remote MCP server URL.
@@ -174,7 +209,23 @@ Server env keys that must exist:
    - "For AAPL, fetch today's news and summarize likely price impact."
    - "Search for news about guidance cuts from today and fetch top 5 items."
 
-## 8) Validation checklist
+## 9) (Optional) Stocks view for business summaries by industry
+
+If your MySQL instance has a `stocks` schema with:
+
+- `stocks.symbol_sector_industry` (includes `symbol`, `sector`, `industry`)
+- `stocks.symbol_business_summary` (includes `symbol`, `business_summary`)
+
+…you can create a helper VIEW so MCP clients can retrieve `business_summary` filtered by `industry` without joins:
+
+1. Run `scripts/create_stocks_views.sql` as a MySQL user with `CREATE VIEW` permission on `stocks`.
+2. Ensure the MySQL user your MCP runs as has `SELECT` permission on the view (and/or the underlying tables, depending on how your privileges are set up).
+
+After that, use the MCP tool:
+
+- `query_table(schema="stocks", table="symbol_industry_business_summary", where={"industry":"Biotechnology"}, limit=1200)`
+
+## 10) Validation checklist
 
 - `mcp-news` systemd service is active after reboot.
 - HTTPS endpoint is reachable externally.
@@ -192,7 +243,7 @@ export MCP_SERVER_URL=https://mcp.your-domain.com/mcp
 python scripts/test_mcp_with_openai.py
 ```
 
-## 9) Troubleshooting
+## 11) Troubleshooting
 
 - 401 from ChatGPT:
   - verify `AUTH_ISSUER_URL`, `AUTH_AUDIENCE`, and scope mapping

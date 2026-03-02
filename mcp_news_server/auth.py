@@ -79,6 +79,8 @@ def _extract_scopes(claims: dict[str, Any]) -> list[str]:
 
 def build_auth_settings(settings: Settings) -> AuthSettings:
     """Build MCP auth metadata used for RFC 9728 discovery."""
+    if not settings.mcp_base_url or not settings.auth_issuer_url:
+        raise RuntimeError("Auth is enabled but MCP_BASE_URL or AUTH_ISSUER_URL is missing.")
     return AuthSettings(
         issuer_url=settings.auth_issuer_url,
         resource_server_url=settings.mcp_base_url,
@@ -87,6 +89,8 @@ def build_auth_settings(settings: Settings) -> AuthSettings:
 
 
 def build_token_verifier(settings: Settings) -> JwtTokenVerifier:
+    if not settings.auth_issuer_url or not settings.auth_jwks_uri or not settings.auth_audience:
+        raise RuntimeError("Auth is enabled but AUTH_ISSUER_URL/AUTH_JWKS_URI/AUTH_AUDIENCE is missing.")
     return JwtTokenVerifier(
         jwks_uri=settings.auth_jwks_uri,
         issuer=settings.auth_issuer_url,

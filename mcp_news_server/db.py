@@ -1,4 +1,4 @@
-"""MySQL query layer for symbol-table news data."""
+"""MySQL query layer for symbol-table news data and safe schema-qualified reads."""
 
 from __future__ import annotations
 
@@ -44,6 +44,13 @@ TEXT_DATA_TYPES = {
     "longtext",
 }
 
+SYSTEM_SCHEMAS = {
+    "information_schema",
+    "mysql",
+    "performance_schema",
+    "sys",
+}
+
 
 class NewsRepository:
     """Repository for read-only queries across symbol-named MySQL tables."""
@@ -64,6 +71,15 @@ class NewsRepository:
         self._symbol_lookup_cache: dict[str, str] = {}
         self._columns_cache: dict[str, list[dict[str, str]]] = {}
         self._primary_key_cache: dict[str, str | None] = {}
+
+        self._schemas_cache: set[str] = set()
+        self._schema_lookup_cache: dict[str, str] = {}
+        self._tables_cache_by_schema: dict[str, set[str]] = {}
+        self._table_lookup_cache_by_schema: dict[str, dict[str, str]] = {}
+
+        self._columns_cache_by_table: dict[tuple[str, str], list[dict[str, str]]] = {}
+        self._column_lookup_cache_by_table: dict[tuple[str, str], dict[str, str]] = {}
+        self._primary_key_cache_by_table: dict[tuple[str, str], str | None] = {}
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "NewsRepository":
@@ -90,6 +106,205 @@ class NewsRepository:
             return ordered
         return ordered[: self._safe_limit(limit)]
 
+    def list_schemas(self, limit: int | None = None, include_system: bool = False) -> list[str]:
+        """List schemas visible to the configured MySQL user."""
+        self._refresh_schemas_cache()
+        ordered = sorted(self._schemas_cache)
+        if not include_system:
+            ordered = [name for name in ordered if name.lower() not in SYSTEM_SCHEMAS]
+        if limit is None:
+            return ordered
+        return ordered[: self._safe_limit(limit)]
+
+    def resolve_schema(self, schema: str) -> str:
+        """Return canonical schema name (case-preserving), or raise if unknown."""
+        self._refresh_schemas_cache()
+        normalized = schema.strip()
+        if not normalized:
+            raise ValueError("schema must be a non-empty string.")
+        if normalized in self._schemas_cache:
+            return normalized
+        fallback = self._schema_lookup_cache.get(normalized.lower())
+        if fallback:
+            return fallback
+        raise ValueError(f"Unknown schema '{schema}'.")
+
+    def list_tables(self, schema: str | None = None, limit: int | None = None) -> list[str]:
+        """List tables and views for a schema (defaults to the configured database)."""
+        target_schema = self.resolve_schema(schema or self.schema)
+        self._refresh_tables_cache(target_schema)
+        ordered = sorted(self._tables_cache_by_schema[target_schema])
+        if limit is None:
+            return ordered
+        return ordered[: self._safe_limit(limit)]
+
+    def resolve_table(self, schema: str, table: str) -> str:
+        """Return canonical table name for a schema (case-preserving), or raise if unknown."""
+        resolved_schema = self.resolve_schema(schema)
+        self._refresh_tables_cache(resolved_schema)
+        normalized = table.strip()
+        if not normalized:
+            raise ValueError("table must be a non-empty string.")
+        available = self._tables_cache_by_schema[resolved_schema]
+        if normalized in available:
+            return normalized
+        fallback = self._table_lookup_cache_by_schema[resolved_schema].get(normalized.lower())
+        if fallback:
+            return fallback
+        raise ValueError(f"Unknown table '{table}' in schema '{resolved_schema}'.")
+
+    def describe_table(self, schema: str, table: str) -> dict[str, Any]:
+        """Return column metadata for a table in a given schema."""
+        resolved_schema = self.resolve_schema(schema)
+        resolved_table = self.resolve_table(resolved_schema, table)
+        columns = self._resolve_columns_for_table(resolved_schema, resolved_table)
+        primary_key = self._resolve_primary_key_for_table(resolved_schema, resolved_table)
+        return {
+            "schema": resolved_schema,
+            "table": resolved_table,
+            "primary_key": primary_key,
+            "columns": columns,
+        }
+
+    def query_table(
+        self,
+        schema: str,
+        table: str,
+        where: dict[str, Any] | None = None,
+        columns: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        order_by: str | None = None,
+        desc: bool = False,
+    ) -> list[dict[str, Any]]:
+        """
+        Run a safe, read-only SELECT against one schema-qualified table.
+
+        - schema/table/column identifiers are validated against information_schema.
+        - where supports equality filters only (plus IS NULL when value is null).
+        """
+        resolved_schema = self.resolve_schema(schema)
+        resolved_table = self.resolve_table(resolved_schema, table)
+
+        row_limit = self._safe_limit(limit)
+        if offset < 0:
+            raise ValueError("offset must be zero or greater.")
+        safe_offset = offset
+
+        select_clause = "*"
+        if columns:
+            resolved_columns = [self.resolve_column(resolved_schema, resolved_table, column) for column in columns]
+            # Preserve caller order, remove duplicates.
+            resolved_columns = list(dict.fromkeys(resolved_columns))
+            select_clause = ", ".join(f"`{self._quote_identifier(column)}`" for column in resolved_columns)
+
+        sql = f"SELECT {select_clause} FROM {self._qualified_table(resolved_schema, resolved_table)}"
+        query_params: dict[str, Any] = {"limit": row_limit, "offset": safe_offset}
+
+        if where:
+            if len(where) > 25:
+                raise ValueError("where supports up to 25 columns.")
+            clauses: list[str] = []
+            for idx, (raw_column, value) in enumerate(where.items()):
+                column = self.resolve_column(resolved_schema, resolved_table, raw_column)
+                if value is None:
+                    clauses.append(f"`{self._quote_identifier(column)}` IS NULL")
+                    continue
+                if isinstance(value, dict):
+                    raise ValueError("where values must be scalar or a list of scalars.")
+                if isinstance(value, list):
+                    if not value:
+                        raise ValueError("where list values must be non-empty.")
+                    if len(value) > 200:
+                        raise ValueError("where list values support up to 200 items.")
+                    if any(item is None for item in value):
+                        raise ValueError("where list values cannot include null.")
+                    if any(isinstance(item, (dict, list)) for item in value):
+                        raise ValueError("where list values must be scalar (no nested lists/dicts).")
+
+                    param_names: list[str] = []
+                    for j, item in enumerate(value):
+                        param_name = f"w{idx}_{j}"
+                        param_names.append(f":{param_name}")
+                        query_params[param_name] = item
+                    clauses.append(f"`{self._quote_identifier(column)}` IN ({', '.join(param_names)})")
+                    continue
+                param_name = f"w{idx}"
+                clauses.append(f"`{self._quote_identifier(column)}` = :{param_name}")
+                query_params[param_name] = value
+            sql = f"{sql} WHERE {' AND '.join(clauses)}"
+
+        if order_by:
+            order_column = self.resolve_column(resolved_schema, resolved_table, order_by)
+            direction = "DESC" if desc else "ASC"
+            sql = f"{sql} ORDER BY `{self._quote_identifier(order_column)}` {direction}"
+
+        sql = f"{sql} LIMIT :limit OFFSET :offset"
+        return self._query(sql, query_params)
+
+    def search_business_summaries(
+        self,
+        keyword: str,
+        schema: str = "stocks",
+        table: str = "symbol_business_summary",
+        symbol_column: str = "symbol",
+        summary_column: str = "business_summary",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[str]:
+        """
+        Return symbols whose business summary contains a keyword.
+
+        This uses a parameterized LIKE '%keyword%' filter. Identifiers are validated
+        against information_schema (same as query_table).
+        """
+        cleaned_keyword = keyword.strip()
+        if not cleaned_keyword:
+            return []
+
+        row_limit = self._safe_limit(limit)
+        if offset < 0:
+            raise ValueError("offset must be zero or greater.")
+        safe_offset = offset
+
+        resolved_schema = self.resolve_schema(schema)
+        resolved_table = self.resolve_table(resolved_schema, table)
+        resolved_symbol_column = self.resolve_column(resolved_schema, resolved_table, symbol_column)
+        resolved_summary_column = self.resolve_column(resolved_schema, resolved_table, summary_column)
+
+        quoted_symbol = self._quote_identifier(resolved_symbol_column)
+        quoted_summary = self._quote_identifier(resolved_summary_column)
+
+        sql = (
+            f"SELECT `{quoted_symbol}` AS symbol "
+            f"FROM {self._qualified_table(resolved_schema, resolved_table)} "
+            f"WHERE `{quoted_summary}` LIKE :pattern "
+            f"ORDER BY `{quoted_symbol}` ASC "
+            f"LIMIT :limit OFFSET :offset"
+        )
+        rows = self._query(
+            sql,
+            {
+                "pattern": f"%{cleaned_keyword}%",
+                "limit": row_limit,
+                "offset": safe_offset,
+            },
+        )
+
+        seen: set[str] = set()
+        symbols: list[str] = []
+        for row in rows:
+            value = row.get("symbol")
+            if value is None:
+                continue
+            symbol_value = str(value)
+            if symbol_value in seen:
+                continue
+            seen.add(symbol_value)
+            symbols.append(symbol_value)
+
+        return symbols
+
     def get_symbol_news(self, symbol: str, date_from: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         normalized_symbol = self._validate_symbol(symbol)
         row_limit = self._safe_limit(limit)
@@ -100,13 +315,16 @@ class NewsRepository:
         order_clause = ""
         if date_from and date_column:
             self._validate_date(date_from)
-            where_clause = f" WHERE `{date_column}` >= :date_from"
+            where_clause = f" WHERE `{self._quote_identifier(date_column)}` >= :date_from"
             query_params["date_from"] = f"{date_from} 00:00:00"
-            order_clause = f" ORDER BY `{date_column}` DESC"
+            order_clause = f" ORDER BY `{self._quote_identifier(date_column)}` DESC"
         elif date_column:
-            order_clause = f" ORDER BY `{date_column}` DESC"
+            order_clause = f" ORDER BY `{self._quote_identifier(date_column)}` DESC"
 
-        sql = f"SELECT * FROM `{normalized_symbol}`{where_clause}{order_clause} LIMIT :limit"
+        sql = (
+            f"SELECT * FROM {self._qualified_table(self.schema, normalized_symbol)}"
+            f"{where_clause}{order_clause} LIMIT :limit"
+        )
         rows = self._query(sql, query_params)
         return [self._augment_row(normalized_symbol, row) for row in rows]
 
@@ -136,19 +354,19 @@ class NewsRepository:
                 continue
 
             date_column = self._resolve_date_column(symbol)
-            text_clauses = [f"`{column}` LIKE :pattern" for column in search_columns]
+            text_clauses = [f"`{self._quote_identifier(column)}` LIKE :pattern" for column in search_columns]
             query_params: dict[str, Any] = {"pattern": f"%{cleaned_query}%"}
             where_sql = f"({' OR '.join(text_clauses)})"
 
             if date_from and date_column:
-                where_sql = f"{where_sql} AND `{date_column}` >= :date_from"
+                where_sql = f"{where_sql} AND `{self._quote_identifier(date_column)}` >= :date_from"
                 query_params["date_from"] = f"{date_from} 00:00:00"
 
             table_limit = min(row_limit - len(results), self.max_rows)
             query_params["limit"] = table_limit
-            order_clause = f" ORDER BY `{date_column}` DESC" if date_column else ""
+            order_clause = f" ORDER BY `{self._quote_identifier(date_column)}` DESC" if date_column else ""
             sql = (
-                f"SELECT * FROM `{symbol}` "
+                f"SELECT * FROM {self._qualified_table(self.schema, symbol)} "
                 f"WHERE {where_sql}"
                 f"{order_clause} LIMIT :limit"
             )
@@ -171,7 +389,10 @@ class NewsRepository:
                 "Use get_symbol_news() to read rows for this symbol."
             )
 
-        sql = f"SELECT * FROM `{normalized_symbol}` WHERE `{primary_key}` = :pk LIMIT 1"
+        sql = (
+            f"SELECT * FROM {self._qualified_table(self.schema, normalized_symbol)} "
+            f"WHERE `{self._quote_identifier(primary_key)}` = :pk LIMIT 1"
+        )
         rows = self._query(sql, {"pk": raw_pk})
         if not rows:
             raise ValueError(f"No row found for id '{identifier}'.")
@@ -223,6 +444,13 @@ class NewsRepository:
         except ValueError as exc:
             raise ValueError("date_from must be in YYYY-MM-DD format.") from exc
 
+    @staticmethod
+    def _ci_get(row: dict[str, Any], key: str) -> Any:
+        if key in row:
+            return row[key]
+        lower_map = {str(k).lower(): v for k, v in row.items()}
+        return lower_map[key.lower()]
+
     def _refresh_symbols_cache(self) -> None:
         if self._symbols_cache:
             return
@@ -231,11 +459,38 @@ class NewsRepository:
             SELECT table_name
             FROM information_schema.tables
             WHERE table_schema = :schema
-              AND table_type = 'BASE TABLE'
+            AND table_type = 'BASE TABLE'
         """
         rows = self._query(sql, {"schema": self.schema})
-        self._symbols_cache = {row["table_name"] for row in rows}
+        self._symbols_cache = {str(self._ci_get(row, "table_name")) for row in rows}
         self._symbol_lookup_cache = {name.lower(): name for name in self._symbols_cache}
+
+    def _refresh_schemas_cache(self) -> None:
+        if self._schemas_cache:
+            return
+
+        sql = """
+            SELECT schema_name
+            FROM information_schema.schemata
+        """
+        rows = self._query(sql, {})
+        self._schemas_cache = {str(self._ci_get(row, "schema_name")) for row in rows}
+        self._schema_lookup_cache = {name.lower(): name for name in self._schemas_cache}
+
+    def _refresh_tables_cache(self, schema: str) -> None:
+        if schema in self._tables_cache_by_schema:
+            return
+
+        sql = """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = :schema
+            AND table_type IN ('BASE TABLE', 'VIEW')
+        """
+        rows = self._query(sql, {"schema": schema})
+        tables = {str(self._ci_get(row, "table_name")) for row in rows}
+        self._tables_cache_by_schema[schema] = tables
+        self._table_lookup_cache_by_schema[schema] = {name.lower(): name for name in tables}
 
     def _resolve_columns(self, symbol: str) -> list[dict[str, str]]:
         if symbol in self._columns_cache:
@@ -245,13 +500,83 @@ class NewsRepository:
             SELECT column_name, data_type
             FROM information_schema.columns
             WHERE table_schema = :schema
-              AND table_name = :table_name
+            AND table_name = :table_name
             ORDER BY ordinal_position
         """
         rows = self._query(sql, {"schema": self.schema, "table_name": symbol})
-        columns = [{"column_name": row["column_name"], "data_type": row["data_type"]} for row in rows]
+        columns = [
+            {
+                "column_name": str(self._ci_get(row, "column_name")),
+                "data_type": str(self._ci_get(row, "data_type")),
+            }
+            for row in rows
+        ]
         self._columns_cache[symbol] = columns
         return columns
+
+    def _resolve_columns_for_table(self, schema: str, table: str) -> list[dict[str, str]]:
+        key = (schema, table)
+        if key in self._columns_cache_by_table:
+            return self._columns_cache_by_table[key]
+
+        sql = """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = :schema
+            AND table_name = :table_name
+            ORDER BY ordinal_position
+        """
+        rows = self._query(sql, {"schema": schema, "table_name": table})
+        columns = [
+            {
+                "column_name": str(self._ci_get(row, "column_name")),
+                "data_type": str(self._ci_get(row, "data_type")),
+            }
+            for row in rows
+        ]
+        self._columns_cache_by_table[key] = columns
+        self._column_lookup_cache_by_table[key] = {col["column_name"].lower(): col["column_name"] for col in columns}
+        return columns
+
+    def resolve_column(self, schema: str, table: str, column: str) -> str:
+        resolved_schema = self.resolve_schema(schema)
+        resolved_table = self.resolve_table(resolved_schema, table)
+        normalized = column.strip()
+        if not normalized:
+            raise ValueError("column must be a non-empty string.")
+
+        key = (resolved_schema, resolved_table)
+        columns = self._resolve_columns_for_table(resolved_schema, resolved_table)
+        available = {col["column_name"] for col in columns}
+        if normalized in available:
+            return normalized
+        fallback = self._column_lookup_cache_by_table.get(key, {}).get(normalized.lower())
+        if fallback:
+            return fallback
+        raise ValueError(f"Unknown column '{column}' in `{resolved_schema}`.`{resolved_table}`.")
+
+    def _resolve_primary_key_for_table(self, schema: str, table: str) -> str | None:
+        key = (schema, table)
+        if key in self._primary_key_cache_by_table:
+            return self._primary_key_cache_by_table[key]
+
+        sql = """
+            SELECT k.column_name
+            FROM information_schema.table_constraints t
+            JOIN information_schema.key_column_usage k
+            ON t.constraint_name = k.constraint_name
+            AND t.table_schema = k.table_schema
+            AND t.table_name = k.table_name
+            WHERE t.constraint_type = 'PRIMARY KEY'
+            AND t.table_schema = :schema
+            AND t.table_name = :table_name
+            ORDER BY k.ordinal_position
+            LIMIT 1
+        """
+        rows = self._query(sql, {"schema": schema, "table_name": table})
+        primary_key = str(self._ci_get(rows[0], "column_name")) if rows else None
+        self._primary_key_cache_by_table[key] = primary_key
+        return primary_key
 
     def _resolve_primary_key(self, symbol: str) -> str | None:
         if symbol in self._primary_key_cache:
@@ -261,17 +586,17 @@ class NewsRepository:
             SELECT k.column_name
             FROM information_schema.table_constraints t
             JOIN information_schema.key_column_usage k
-              ON t.constraint_name = k.constraint_name
-             AND t.table_schema = k.table_schema
-             AND t.table_name = k.table_name
+            ON t.constraint_name = k.constraint_name
+            AND t.table_schema = k.table_schema
+            AND t.table_name = k.table_name
             WHERE t.constraint_type = 'PRIMARY KEY'
-              AND t.table_schema = :schema
-              AND t.table_name = :table_name
+            AND t.table_schema = :schema
+            AND t.table_name = :table_name
             ORDER BY k.ordinal_position
             LIMIT 1
         """
         rows = self._query(sql, {"schema": self.schema, "table_name": symbol})
-        primary_key = rows[0]["column_name"] if rows else None
+        primary_key = str(self._ci_get(rows[0], "column_name")) if rows else None
         self._primary_key_cache[symbol] = primary_key
         return primary_key
 
@@ -301,6 +626,15 @@ class NewsRepository:
         with self.engine.connect() as connection:
             result = connection.execute(text(sql), params)
             return [dict(row._mapping) for row in result]
+
+    @staticmethod
+    def _quote_identifier(identifier: str) -> str:
+        if "\x00" in identifier:
+            raise ValueError("Invalid SQL identifier.")
+        return identifier.replace("`", "``")
+
+    def _qualified_table(self, schema: str, table: str) -> str:
+        return f"`{self._quote_identifier(schema)}`.`{self._quote_identifier(table)}`"
 
     def _extract_title(self, row: dict[str, Any]) -> str:
         for candidate in PREFERRED_TEXT_COLUMNS:

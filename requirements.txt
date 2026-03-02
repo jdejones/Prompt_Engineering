@@ -3,3 +3,4 @@ openai
 sqlalchemy
 pymysql
 pyjwt[crypto]
+python-dotenv
