@@ -51,6 +51,9 @@ SYSTEM_SCHEMAS = {
     "sys",
 }
 
+EVENT_SUMMARY_SCHEMA = "stocks"
+EVENT_SUMMARY_TABLE = "recent_events"
+
 
 class NewsRepository:
     """Repository for read-only queries across symbol-named MySQL tables."""
@@ -328,6 +331,72 @@ class NewsRepository:
         rows = self._query(sql, query_params)
         return [self._augment_row(normalized_symbol, row) for row in rows]
 
+    def update_event_summary(self, symbol: str, date: str, event_summary: str) -> dict[str, Any]:
+        """Update event_summary in stocks.recent_events for the single symbol/date row."""
+        normalized_symbol = symbol.strip()
+        if not normalized_symbol:
+            raise ValueError("symbol must be a non-empty string.")
+        self._validate_date(date, field_name="date")
+
+        resolved_schema = self.resolve_schema(EVENT_SUMMARY_SCHEMA)
+        resolved_table = self.resolve_table(resolved_schema, EVENT_SUMMARY_TABLE)
+        symbol_column = self.resolve_column(resolved_schema, resolved_table, "symbol")
+        date_column = self.resolve_column(resolved_schema, resolved_table, "date")
+        event_summary_column = self.resolve_column(resolved_schema, resolved_table, "event_summary")
+        quoted_symbol_column = self._quote_identifier(symbol_column)
+        quoted_date_column = self._quote_identifier(date_column)
+        quoted_event_summary_column = self._quote_identifier(event_summary_column)
+        table_name = self._qualified_table(resolved_schema, resolved_table)
+
+        count_sql = (
+            f"SELECT COUNT(*) AS row_count FROM {table_name} "
+            f"WHERE `{quoted_symbol_column}` = :symbol "
+            f"AND DATE(`{quoted_date_column}`) = :date"
+        )
+        update_sql = (
+            f"UPDATE {table_name} "
+            f"SET `{quoted_event_summary_column}` = :event_summary "
+            f"WHERE `{quoted_symbol_column}` = :symbol "
+            f"AND DATE(`{quoted_date_column}`) = :date"
+        )
+
+        with self.engine.begin() as connection:
+            count_result = connection.execute(
+                text(count_sql),
+                {
+                    "symbol": normalized_symbol,
+                    "date": date,
+                },
+            ).one()
+            row_count = int(count_result._mapping["row_count"])
+            if row_count == 0:
+                raise ValueError(f"No row found for symbol '{normalized_symbol}' on date '{date}'.")
+            if row_count > 1:
+                raise ValueError(
+                    f"Found {row_count} rows for symbol '{normalized_symbol}' on date '{date}'. "
+                    "Refusing to update event_summary without a unique row."
+                )
+
+            result = connection.execute(
+                text(update_sql),
+                {
+                    "symbol": normalized_symbol,
+                    "date": date,
+                    "event_summary": event_summary,
+                },
+            )
+
+        return {
+            "schema": resolved_schema,
+            "table": resolved_table,
+            "symbol": normalized_symbol,
+            "date": date,
+            "symbol_column": symbol_column,
+            "date_column": date_column,
+            "updated_column": event_summary_column,
+            "rows_updated": result.rowcount,
+        }
+
     def search(
         self,
         query: str,
@@ -438,11 +507,11 @@ class NewsRepository:
             raise ValueError("limit must be greater than zero.")
         return min(requested, self.max_rows)
 
-    def _validate_date(self, value: str) -> None:
+    def _validate_date(self, value: str, field_name: str = "date_from") -> None:
         try:
             datetime.strptime(value, "%Y-%m-%d")
         except ValueError as exc:
-            raise ValueError("date_from must be in YYYY-MM-DD format.") from exc
+            raise ValueError(f"{field_name} must be in YYYY-MM-DD format.") from exc
 
     @staticmethod
     def _ci_get(row: dict[str, Any], key: str) -> Any:

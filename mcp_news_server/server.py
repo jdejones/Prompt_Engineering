@@ -1,4 +1,4 @@
-"""Remote MCP server exposing read-only tools for MySQL news data and generic table reads."""
+"""Remote MCP server exposing tools for MySQL news data and generic table reads."""
 
 from __future__ import annotations
 
@@ -18,12 +18,13 @@ SETTINGS = Settings.from_env()
 REPOSITORY = NewsRepository.from_settings(SETTINGS)
 
 SERVER_INSTRUCTIONS = """
-This MCP server provides read-only access to stock-news tables in a MySQL schema.
+This MCP server provides access to stock-news tables in a MySQL schema.
 Use list_symbols to discover available stock specific news tables, get_symbol_news 
 for direct reads, search for keyword-based discovery, and fetch for full row retrieval by canonical id.
 Use select_schema_tables to discover schemas and tables when you don't know names ahead of time.
 Use describe_table and query_table for generic reads from other schemas/tables.
 Use search_business_summaries to find stock symbols whose business summary contains a keyword.
+Use update_event_summary to update only the event_summary column in stocks.recent_events for a single symbol/date row.
 Use scripts/create_stocks_views.sql for large queries on business summaries by industry.
 """
 
@@ -167,6 +168,17 @@ def get_symbol_news(symbol: str, date_from: str | None = None, limit: int = 50) 
     rows = REPOSITORY.get_symbol_news(symbol=symbol, date_from=date_from, limit=limit)
     resolved_symbol = rows[0]["symbol"] if rows else symbol
     return {"symbol": resolved_symbol, "count": len(rows), "rows": rows}
+
+
+@mcp.tool()
+def update_event_summary(symbol: str, date: str, event_summary: str) -> dict[str, Any]:
+    """
+    Update only the event_summary column in stocks.recent_events for one symbol/date row.
+
+    Both `symbol` and `date` are required. `date` must be in YYYY-MM-DD format.
+    The update is refused if the symbol/date pair does not identify exactly one row.
+    """
+    return REPOSITORY.update_event_summary(symbol=symbol, date=date, event_summary=event_summary)
 
 
 @mcp.tool()
