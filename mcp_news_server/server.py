@@ -25,6 +25,7 @@ Use select_schema_tables to discover schemas and tables when you don't know name
 Use describe_table and query_table for generic reads from other schemas/tables.
 Use search_business_summaries to find stock symbols whose business summary contains a keyword.
 Use update_event_summary to update only the event_summary column in stocks.recent_events for a single symbol/date row.
+Use update_new_ep_event_summary to update only the event_summary column in stocks.new_ep for a single symbol row.
 Use scripts/create_stocks_views.sql for large queries on business summaries by industry.
 """
 
@@ -179,6 +180,16 @@ def update_event_summary(symbol: str, date: str, event_summary: str) -> dict[str
     The update is refused if the symbol/date pair does not identify exactly one row.
     """
     return REPOSITORY.update_event_summary(symbol=symbol, date=date, event_summary=event_summary)
+
+
+@mcp.tool()
+def update_new_ep_event_summary(symbol: str, event_summary: str) -> dict[str, Any]:
+    """
+    Update only the event_summary column in stocks.new_ep for one symbol row.
+
+    `symbol` is required and must identify exactly one row.
+    """
+    return REPOSITORY.update_new_ep_event_summary(symbol=symbol, event_summary=event_summary)
 
 
 @mcp.tool()

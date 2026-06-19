@@ -53,6 +53,8 @@ SYSTEM_SCHEMAS = {
 
 EVENT_SUMMARY_SCHEMA = "stocks"
 EVENT_SUMMARY_TABLE = "recent_events"
+NEW_EP_SCHEMA = "stocks"
+NEW_EP_TABLE = "new_ep"
 
 
 class NewsRepository:
@@ -393,6 +395,58 @@ class NewsRepository:
             "date": date,
             "symbol_column": symbol_column,
             "date_column": date_column,
+            "updated_column": event_summary_column,
+            "rows_updated": result.rowcount,
+        }
+
+    def update_new_ep_event_summary(self, symbol: str, event_summary: str) -> dict[str, Any]:
+        """Update event_summary in stocks.new_ep for the single symbol row."""
+        normalized_symbol = symbol.strip()
+        if not normalized_symbol:
+            raise ValueError("symbol must be a non-empty string.")
+
+        resolved_schema = self.resolve_schema(NEW_EP_SCHEMA)
+        resolved_table = self.resolve_table(resolved_schema, NEW_EP_TABLE)
+        symbol_column = self.resolve_column(resolved_schema, resolved_table, "symbol")
+        event_summary_column = self.resolve_column(resolved_schema, resolved_table, "event_summary")
+        quoted_symbol_column = self._quote_identifier(symbol_column)
+        quoted_event_summary_column = self._quote_identifier(event_summary_column)
+        table_name = self._qualified_table(resolved_schema, resolved_table)
+
+        count_sql = (
+            f"SELECT COUNT(*) AS row_count FROM {table_name} "
+            f"WHERE `{quoted_symbol_column}` = :symbol"
+        )
+        update_sql = (
+            f"UPDATE {table_name} "
+            f"SET `{quoted_event_summary_column}` = :event_summary "
+            f"WHERE `{quoted_symbol_column}` = :symbol"
+        )
+
+        with self.engine.begin() as connection:
+            count_result = connection.execute(text(count_sql), {"symbol": normalized_symbol}).one()
+            row_count = int(count_result._mapping["row_count"])
+            if row_count == 0:
+                raise ValueError(f"No row found for symbol '{normalized_symbol}'.")
+            if row_count > 1:
+                raise ValueError(
+                    f"Found {row_count} rows for symbol '{normalized_symbol}'. "
+                    "Refusing to update event_summary without a unique row."
+                )
+
+            result = connection.execute(
+                text(update_sql),
+                {
+                    "symbol": normalized_symbol,
+                    "event_summary": event_summary,
+                },
+            )
+
+        return {
+            "schema": resolved_schema,
+            "table": resolved_table,
+            "symbol": normalized_symbol,
+            "symbol_column": symbol_column,
             "updated_column": event_summary_column,
             "rows_updated": result.rowcount,
         }

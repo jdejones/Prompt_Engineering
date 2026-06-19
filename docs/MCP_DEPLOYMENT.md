@@ -10,7 +10,10 @@ This guide walks through the MCP server that was added in this repo and how to d
   - `select_schema_tables`
   - `describe_table`
   - `query_table`
+  - `search_business_summaries`
   - `get_symbol_news`
+  - `update_event_summary`
+  - `update_new_ep_event_summary`
   - `search`
   - `fetch`
 - Query safety controls:
