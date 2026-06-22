@@ -17,17 +17,24 @@ LOGGER = logging.getLogger(__name__)
 SETTINGS = Settings.from_env()
 REPOSITORY = NewsRepository.from_settings(SETTINGS)
 
-SERVER_INSTRUCTIONS = """
+READ_TOOL_INSTRUCTIONS = """
 This MCP server provides access to stock-news tables in a MySQL schema.
 Use list_symbols to discover available stock specific news tables, get_symbol_news 
 for direct reads, search for keyword-based discovery, and fetch for full row retrieval by canonical id.
 Use select_schema_tables to discover schemas and tables when you don't know names ahead of time.
 Use describe_table and query_table for generic reads from other schemas/tables.
 Use search_business_summaries to find stock symbols whose business summary contains a keyword.
-Use update_event_summary to update only the event_summary column in stocks.recent_events for a single symbol/date row.
-Use update_new_ep_event_summary to update only the event_summary column in stocks.new_ep for a single symbol row.
 Use scripts/create_stocks_views.sql for large queries on business summaries by industry.
 """
+
+WRITE_TOOL_INSTRUCTIONS = """
+Use update_event_summary to update only the event_summary column in stocks.recent_events for a single symbol/date row.
+Use update_new_ep_event_summary to update only the event_summary column in stocks.new_ep for a single symbol row.
+"""
+
+SERVER_INSTRUCTIONS = READ_TOOL_INSTRUCTIONS
+if SETTINGS.write_tools_enabled:
+    SERVER_INSTRUCTIONS = f"{SERVER_INSTRUCTIONS.rstrip()}\n{WRITE_TOOL_INSTRUCTIONS}"
 
 auth_settings = build_auth_settings(SETTINGS) if SETTINGS.auth_enabled else None
 token_verifier = build_token_verifier(SETTINGS) if SETTINGS.auth_enabled else None
@@ -171,7 +178,6 @@ def get_symbol_news(symbol: str, date_from: str | None = None, limit: int = 50) 
     return {"symbol": resolved_symbol, "count": len(rows), "rows": rows}
 
 
-@mcp.tool()
 def update_event_summary(symbol: str, date: str, event_summary: str) -> dict[str, Any]:
     """
     Update only the event_summary column in stocks.recent_events for one symbol/date row.
@@ -182,7 +188,6 @@ def update_event_summary(symbol: str, date: str, event_summary: str) -> dict[str
     return REPOSITORY.update_event_summary(symbol=symbol, date=date, event_summary=event_summary)
 
 
-@mcp.tool()
 def update_new_ep_event_summary(symbol: str, event_summary: str) -> dict[str, Any]:
     """
     Update only the event_summary column in stocks.new_ep for one symbol row.
@@ -190,6 +195,11 @@ def update_new_ep_event_summary(symbol: str, event_summary: str) -> dict[str, An
     `symbol` is required and must identify exactly one row.
     """
     return REPOSITORY.update_new_ep_event_summary(symbol=symbol, event_summary=event_summary)
+
+
+if SETTINGS.write_tools_enabled:
+    update_event_summary = mcp.tool()(update_event_summary)
+    update_new_ep_event_summary = mcp.tool()(update_new_ep_event_summary)
 
 
 @mcp.tool()

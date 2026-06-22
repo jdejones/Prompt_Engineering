@@ -46,6 +46,7 @@ class Settings:
     mcp_transport: str
     mcp_base_url: str | None
     auth_enabled: bool
+    write_tools_enabled: bool
 
     mysql_host: str
     mysql_port: int
@@ -106,6 +107,7 @@ class Settings:
             mcp_transport=os.getenv("MCP_TRANSPORT", "streamable-http"),
             mcp_base_url=base_url,
             auth_enabled=auth_enabled,
+            write_tools_enabled=_get_bool("MCP_ENABLE_WRITE_TOOLS", default=True),
             mysql_host=os.getenv("MYSQL_HOST", "127.0.0.1"),
             mysql_port=_get_int("MYSQL_PORT", 3306),
             mysql_user=os.getenv("MYSQL_USER", "root"),
