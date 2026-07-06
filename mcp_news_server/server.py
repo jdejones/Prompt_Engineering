@@ -30,6 +30,8 @@ Use scripts/create_stocks_views.sql for large queries on business summaries by i
 WRITE_TOOL_INSTRUCTIONS = """
 Use update_event_summary to update only the event_summary column in stocks.recent_events for a single symbol/date row.
 Use update_new_ep_event_summary to update only the event_summary column in stocks.new_ep for a single symbol row.
+Use create_business_analytics_table, insert_business_analytics_rows, and update_business_analytics_rows
+to write only within the business_analytics schema.
 """
 
 SERVER_INSTRUCTIONS = READ_TOOL_INSTRUCTIONS
@@ -197,9 +199,61 @@ def update_new_ep_event_summary(symbol: str, event_summary: str) -> dict[str, An
     return REPOSITORY.update_new_ep_event_summary(symbol=symbol, event_summary=event_summary)
 
 
+def create_business_analytics_table(
+    table: str,
+    columns: list[dict[str, Any]],
+    primary_key: list[str] | None = None,
+    if_not_exists: bool = True,
+) -> dict[str, Any]:
+    """
+    Create a table in business_analytics using structured column definitions.
+
+    Column definitions require `name` and `type`. Supported types include integer, bigint,
+    varchar/char with optional `length`, text, decimal with optional precision/scale,
+    float, double, boolean, date, datetime, timestamp, time, and json.
+    """
+    return REPOSITORY.create_business_analytics_table(
+        table=table,
+        columns=columns,
+        primary_key=primary_key,
+        if_not_exists=if_not_exists,
+    )
+
+
+def insert_business_analytics_rows(table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Insert one or more rows into a business_analytics table.
+
+    All rows must use the same column set. Table and column names are validated before insert.
+    """
+    return REPOSITORY.insert_business_analytics_rows(table=table, rows=rows)
+
+
+def update_business_analytics_rows(
+    table: str,
+    values: dict[str, Any],
+    where: dict[str, Any],
+    limit: int = 100,
+) -> dict[str, Any]:
+    """
+    Update rows in a business_analytics table.
+
+    `where` is required and supports equality filters only, plus list values for IN (...).
+    """
+    return REPOSITORY.update_business_analytics_rows(
+        table=table,
+        values=values,
+        where=where,
+        limit=limit,
+    )
+
+
 if SETTINGS.write_tools_enabled:
     update_event_summary = mcp.tool()(update_event_summary)
     update_new_ep_event_summary = mcp.tool()(update_new_ep_event_summary)
+    create_business_analytics_table = mcp.tool()(create_business_analytics_table)
+    insert_business_analytics_rows = mcp.tool()(insert_business_analytics_rows)
+    update_business_analytics_rows = mcp.tool()(update_business_analytics_rows)
 
 
 @mcp.tool()

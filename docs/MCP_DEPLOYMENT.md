@@ -4,7 +4,7 @@ This guide walks through the MCP server that was added in this repo and how to d
 
 ## What was built
 
-- Read-only MCP server in `mcp_news_server/` with tools:
+- MCP server in `mcp_news_server/` with read tools and optional scoped write tools:
   - `health`
   - `list_symbols`
   - `select_schema_tables`
@@ -14,12 +14,16 @@ This guide walks through the MCP server that was added in this repo and how to d
   - `get_symbol_news`
   - `update_event_summary`
   - `update_new_ep_event_summary`
+  - `create_business_analytics_table`
+  - `insert_business_analytics_rows`
+  - `update_business_analytics_rows`
   - `search`
   - `fetch`
 - Query safety controls:
   - symbol whitelist from `information_schema.tables`
   - parameterized SQL values for filters/search
   - max row limits (`MCP_MAX_ROWS`) and max symbol scan limits (`MCP_MAX_SCAN_SYMBOLS`)
+  - business analytics write tools are scoped to `business_analytics.*`
 - OAuth resource server support:
   - JWT verification via JWKS (`AUTH_JWKS_URI`)
   - issuer/audience/scope checks

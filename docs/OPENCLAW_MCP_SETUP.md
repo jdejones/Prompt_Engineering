@@ -10,9 +10,22 @@ This setup runs a second MCP server instance for OpenClaw. It uses the same `mcp
 - MySQL port: `3306`
 - MySQL user: `openclawdb`
 - MySQL password source: local environment variable `openclawdb`
-- Write tools: disabled with `MCP_ENABLE_WRITE_TOOLS=0`
+- Write tools: enabled with `MCP_ENABLE_WRITE_TOOLS=1`
+- Write scope: `business_analytics.*` only for the OpenClaw analytics write tools
 
 OpenClaw should reach the MCP server over Tailscale. MySQL should remain local-only and should not be exposed to the tailnet.
+
+## Business Analytics Write Tools
+
+The OpenClaw MCP process exposes scoped tools for `business_analytics`:
+
+- `create_business_analytics_table`
+- `insert_business_analytics_rows`
+- `update_business_analytics_rows`
+
+These tools do not accept a schema parameter. They always target `business_analytics`, validate table/column identifiers, and use parameterized values for inserts and updates.
+
+The MySQL user `openclawdb` must have `CREATE`, `INSERT`, `UPDATE`, and `SELECT` on `business_analytics.*`.
 
 ## Start The Server
 

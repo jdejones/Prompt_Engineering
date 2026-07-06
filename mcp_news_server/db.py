@@ -55,6 +55,28 @@ EVENT_SUMMARY_SCHEMA = "stocks"
 EVENT_SUMMARY_TABLE = "recent_events"
 NEW_EP_SCHEMA = "stocks"
 NEW_EP_TABLE = "new_ep"
+BUSINESS_ANALYTICS_SCHEMA = "business_analytics"
+
+INTEGER_COLUMN_TYPES = {
+    "bigint",
+    "int",
+    "integer",
+    "smallint",
+    "tinyint",
+}
+SIMPLE_COLUMN_TYPES = {
+    "boolean",
+    "date",
+    "datetime",
+    "double",
+    "float",
+    "json",
+    "longtext",
+    "mediumtext",
+    "text",
+    "time",
+    "timestamp",
+}
 
 
 class NewsRepository:
@@ -451,6 +473,189 @@ class NewsRepository:
             "rows_updated": result.rowcount,
         }
 
+    def create_business_analytics_table(
+        self,
+        table: str,
+        columns: list[dict[str, Any]],
+        primary_key: list[str] | None = None,
+        if_not_exists: bool = True,
+    ) -> dict[str, Any]:
+        """Create a table in business_analytics from a structured column definition."""
+        resolved_schema = self.resolve_schema(BUSINESS_ANALYTICS_SCHEMA)
+        table_name = self._validate_new_identifier(table, "table")
+        if not columns:
+            raise ValueError("columns must include at least one column definition.")
+        if len(columns) > 100:
+            raise ValueError("create table supports up to 100 columns.")
+
+        column_sql: list[str] = []
+        column_names: list[str] = []
+        inline_primary_key: list[str] = []
+        auto_increment_columns: list[str] = []
+        auto_increment_count = 0
+
+        for raw_column in columns:
+            if not isinstance(raw_column, dict):
+                raise ValueError("each column definition must be an object.")
+            column_name = self._validate_new_identifier(str(raw_column.get("name", "")), "column")
+            if column_name in column_names:
+                raise ValueError(f"Duplicate column '{column_name}'.")
+
+            column_type = self._render_column_type(raw_column)
+            nullable = bool(raw_column.get("nullable", True))
+            auto_increment = bool(raw_column.get("auto_increment", False))
+            if auto_increment:
+                auto_increment_count += 1
+                auto_increment_columns.append(column_name)
+                if str(raw_column.get("type", "")).strip().lower() not in INTEGER_COLUMN_TYPES:
+                    raise ValueError("auto_increment is only supported on integer columns.")
+                nullable = False
+
+            parts = [f"`{self._quote_identifier(column_name)}`", column_type]
+            if not nullable:
+                parts.append("NOT NULL")
+            if auto_increment:
+                parts.append("AUTO_INCREMENT")
+            column_sql.append(" ".join(parts))
+            column_names.append(column_name)
+
+            if bool(raw_column.get("primary_key", False)):
+                inline_primary_key.append(column_name)
+
+        if auto_increment_count > 1:
+            raise ValueError("Only one auto_increment column is supported.")
+
+        primary_key_columns = primary_key or inline_primary_key
+        if primary_key_columns:
+            normalized_pk = [self._validate_new_identifier(column, "primary key column") for column in primary_key_columns]
+            unknown_pk = [column for column in normalized_pk if column not in column_names]
+            if unknown_pk:
+                raise ValueError(f"Primary key column(s) not found: {', '.join(unknown_pk)}.")
+            normalized_pk = list(dict.fromkeys(normalized_pk))
+            missing_auto_increment_pk = [column for column in auto_increment_columns if column not in normalized_pk]
+            if missing_auto_increment_pk:
+                raise ValueError("auto_increment columns must be included in the primary key.")
+            quoted_pk = ", ".join(f"`{self._quote_identifier(column)}`" for column in normalized_pk)
+            column_sql.append(f"PRIMARY KEY ({quoted_pk})")
+        elif auto_increment_columns:
+            raise ValueError("auto_increment columns must be included in the primary key.")
+
+        existence_clause = "IF NOT EXISTS " if if_not_exists else ""
+        sql = (
+            f"CREATE TABLE {existence_clause}{self._qualified_table(resolved_schema, table_name)} "
+            f"({', '.join(column_sql)})"
+        )
+
+        with self.engine.begin() as connection:
+            connection.execute(text(sql))
+
+        self._invalidate_table_metadata(resolved_schema, table_name)
+        return {
+            "schema": resolved_schema,
+            "table": table_name,
+            "columns": column_names,
+            "primary_key": primary_key_columns,
+            "created": True,
+        }
+
+    def insert_business_analytics_rows(self, table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Insert one or more rows into a table in business_analytics."""
+        resolved_schema = self.resolve_schema(BUSINESS_ANALYTICS_SCHEMA)
+        resolved_table = self.resolve_table(resolved_schema, table)
+        if not rows:
+            raise ValueError("rows must include at least one row.")
+        if len(rows) > self.max_rows:
+            raise ValueError(f"insert supports up to {self.max_rows} rows.")
+        if any(not isinstance(row, dict) for row in rows):
+            raise ValueError("each row must be an object.")
+
+        first_columns = list(rows[0].keys())
+        if not first_columns:
+            raise ValueError("rows must include at least one column.")
+        if len(first_columns) > 100:
+            raise ValueError("insert supports up to 100 columns.")
+
+        expected_columns = set(first_columns)
+        if len(expected_columns) != len(first_columns):
+            raise ValueError("row columns must be unique.")
+        for row in rows:
+            if set(row.keys()) != expected_columns:
+                raise ValueError("all inserted rows must include the same columns.")
+
+        resolved_columns = [self.resolve_column(resolved_schema, resolved_table, column) for column in first_columns]
+        quoted_columns = ", ".join(f"`{self._quote_identifier(column)}`" for column in resolved_columns)
+
+        values_sql: list[str] = []
+        query_params: dict[str, Any] = {}
+        for row_index, row in enumerate(rows):
+            param_names: list[str] = []
+            for column_index, raw_column in enumerate(first_columns):
+                param_name = f"r{row_index}_c{column_index}"
+                query_params[param_name] = row[raw_column]
+                param_names.append(f":{param_name}")
+            values_sql.append(f"({', '.join(param_names)})")
+
+        sql = (
+            f"INSERT INTO {self._qualified_table(resolved_schema, resolved_table)} "
+            f"({quoted_columns}) VALUES {', '.join(values_sql)}"
+        )
+
+        with self.engine.begin() as connection:
+            result = connection.execute(text(sql), query_params)
+
+        return {
+            "schema": resolved_schema,
+            "table": resolved_table,
+            "columns": resolved_columns,
+            "rows_inserted": result.rowcount,
+        }
+
+    def update_business_analytics_rows(
+        self,
+        table: str,
+        values: dict[str, Any],
+        where: dict[str, Any],
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Update rows in a business_analytics table using equality-only filters."""
+        resolved_schema = self.resolve_schema(BUSINESS_ANALYTICS_SCHEMA)
+        resolved_table = self.resolve_table(resolved_schema, table)
+        if not values:
+            raise ValueError("values must include at least one column to update.")
+        if not where:
+            raise ValueError("where is required for updates.")
+        if len(values) > 25:
+            raise ValueError("values supports up to 25 columns.")
+        if len(where) > 25:
+            raise ValueError("where supports up to 25 columns.")
+        row_limit = self._safe_limit(limit)
+
+        query_params: dict[str, Any] = {"limit": row_limit}
+        assignments: list[str] = []
+        for idx, (raw_column, value) in enumerate(values.items()):
+            column = self.resolve_column(resolved_schema, resolved_table, raw_column)
+            param_name = f"v{idx}"
+            assignments.append(f"`{self._quote_identifier(column)}` = :{param_name}")
+            query_params[param_name] = value
+
+        where_clause = self._equality_where_clause(resolved_schema, resolved_table, where, query_params)
+        sql = (
+            f"UPDATE {self._qualified_table(resolved_schema, resolved_table)} "
+            f"SET {', '.join(assignments)} "
+            f"WHERE {where_clause} "
+            f"LIMIT :limit"
+        )
+
+        with self.engine.begin() as connection:
+            result = connection.execute(text(sql), query_params)
+
+        return {
+            "schema": resolved_schema,
+            "table": resolved_table,
+            "rows_updated": result.rowcount,
+            "limit": row_limit,
+        }
+
     def search(
         self,
         query: str,
@@ -566,6 +771,86 @@ class NewsRepository:
             datetime.strptime(value, "%Y-%m-%d")
         except ValueError as exc:
             raise ValueError(f"{field_name} must be in YYYY-MM-DD format.") from exc
+
+    def _validate_new_identifier(self, identifier: str, field_name: str) -> str:
+        normalized = identifier.strip()
+        if not normalized:
+            raise ValueError(f"{field_name} must be a non-empty string.")
+        if len(normalized) > 64:
+            raise ValueError(f"{field_name} must be 64 characters or fewer.")
+        if not (normalized[0].isalpha() or normalized[0] == "_"):
+            raise ValueError(f"{field_name} must start with a letter or underscore.")
+        if not all(char.isalnum() or char == "_" for char in normalized):
+            raise ValueError(f"{field_name} may only contain letters, numbers, and underscores.")
+        return normalized
+
+    def _render_column_type(self, column: dict[str, Any]) -> str:
+        raw_type = str(column.get("type", "")).strip().lower()
+        if raw_type in INTEGER_COLUMN_TYPES:
+            return "INTEGER" if raw_type == "integer" else raw_type.upper()
+        if raw_type in SIMPLE_COLUMN_TYPES:
+            return "TINYINT(1)" if raw_type == "boolean" else raw_type.upper()
+        if raw_type in {"varchar", "char"}:
+            length = int(column.get("length", 255))
+            if length <= 0 or length > 65535:
+                raise ValueError(f"{raw_type} length must be between 1 and 65535.")
+            return f"{raw_type.upper()}({length})"
+        if raw_type == "decimal":
+            precision = int(column.get("precision", 18))
+            scale = int(column.get("scale", 4))
+            if precision <= 0 or precision > 65:
+                raise ValueError("decimal precision must be between 1 and 65.")
+            if scale < 0 or scale > 30 or scale > precision:
+                raise ValueError("decimal scale must be between 0 and 30 and no greater than precision.")
+            return f"DECIMAL({precision}, {scale})"
+        raise ValueError(
+            "Unsupported column type. Use integer, bigint, smallint, tinyint, "
+            "varchar, char, text, mediumtext, longtext, decimal, float, double, "
+            "boolean, date, datetime, timestamp, time, or json."
+        )
+
+    def _equality_where_clause(
+        self,
+        schema: str,
+        table: str,
+        where: dict[str, Any],
+        query_params: dict[str, Any],
+    ) -> str:
+        clauses: list[str] = []
+        for idx, (raw_column, value) in enumerate(where.items()):
+            column = self.resolve_column(schema, table, raw_column)
+            if value is None:
+                clauses.append(f"`{self._quote_identifier(column)}` IS NULL")
+                continue
+            if isinstance(value, dict):
+                raise ValueError("where values must be scalar or a list of scalars.")
+            if isinstance(value, list):
+                if not value:
+                    raise ValueError("where list values must be non-empty.")
+                if len(value) > 200:
+                    raise ValueError("where list values support up to 200 items.")
+                if any(item is None for item in value):
+                    raise ValueError("where list values cannot include null.")
+                if any(isinstance(item, (dict, list)) for item in value):
+                    raise ValueError("where list values must be scalar (no nested lists/dicts).")
+                param_names: list[str] = []
+                for j, item in enumerate(value):
+                    param_name = f"w{idx}_{j}"
+                    param_names.append(f":{param_name}")
+                    query_params[param_name] = item
+                clauses.append(f"`{self._quote_identifier(column)}` IN ({', '.join(param_names)})")
+                continue
+            param_name = f"w{idx}"
+            clauses.append(f"`{self._quote_identifier(column)}` = :{param_name}")
+            query_params[param_name] = value
+        return " AND ".join(clauses)
+
+    def _invalidate_table_metadata(self, schema: str, table: str) -> None:
+        self._tables_cache_by_schema.pop(schema, None)
+        self._table_lookup_cache_by_schema.pop(schema, None)
+        self._columns_cache_by_table.pop((schema, table), None)
+        self._column_lookup_cache_by_table.pop((schema, table), None)
+        self._primary_key_cache_by_table.pop((schema, table), None)
 
     @staticmethod
     def _ci_get(row: dict[str, Any], key: str) -> Any:
