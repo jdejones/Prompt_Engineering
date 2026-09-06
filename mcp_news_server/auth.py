@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Any
 
@@ -12,6 +13,32 @@ from mcp.server.auth.settings import AuthSettings
 from mcp_news_server.config import Settings
 
 LOGGER = logging.getLogger(__name__)
+
+
+class StaticBearerTokenVerifier(TokenVerifier):
+    """Validate one pre-shared bearer token using constant-time comparison."""
+
+    def __init__(
+        self,
+        token: str,
+        resource: str,
+        scopes: list[str],
+    ) -> None:
+        self._token = token
+        self._resource = resource
+        self._scopes = scopes
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not hmac.compare_digest(token, self._token):
+            LOGGER.debug("Static bearer token verification failed.")
+            return None
+
+        return AccessToken(
+            token=token,
+            client_id="grok-static-client",
+            scopes=self._scopes,
+            resource=self._resource,
+        )
 
 
 class JwtTokenVerifier(TokenVerifier):
@@ -78,9 +105,19 @@ def _extract_scopes(claims: dict[str, Any]) -> list[str]:
 
 
 def build_auth_settings(settings: Settings) -> AuthSettings:
-    """Build MCP auth metadata used for RFC 9728 discovery."""
-    if not settings.mcp_base_url or not settings.auth_issuer_url:
-        raise RuntimeError("Auth is enabled but MCP_BASE_URL or AUTH_ISSUER_URL is missing.")
+    """Build MCP auth metadata used by the SDK and RFC 9728 discovery."""
+    if not settings.mcp_base_url:
+        raise RuntimeError("Auth is enabled but MCP_BASE_URL is missing.")
+
+    if settings.auth_mode == "static":
+        return AuthSettings(
+            issuer_url=settings.mcp_base_url,
+            resource_server_url=settings.mcp_base_url,
+            required_scopes=settings.auth_required_scopes,
+        )
+
+    if settings.auth_mode != "oauth" or not settings.auth_issuer_url:
+        raise RuntimeError("OAuth auth is enabled but AUTH_ISSUER_URL is missing.")
     return AuthSettings(
         issuer_url=settings.auth_issuer_url,
         resource_server_url=settings.mcp_base_url,
@@ -88,7 +125,20 @@ def build_auth_settings(settings: Settings) -> AuthSettings:
     )
 
 
-def build_token_verifier(settings: Settings) -> JwtTokenVerifier:
+def build_token_verifier(settings: Settings) -> TokenVerifier:
+    if settings.auth_mode == "static":
+        if not settings.static_bearer_token or not settings.mcp_base_url:
+            raise RuntimeError(
+                "Static auth is enabled but MCP_STATIC_BEARER_TOKEN or MCP_BASE_URL is missing."
+            )
+        return StaticBearerTokenVerifier(
+            token=settings.static_bearer_token,
+            resource=settings.mcp_base_url,
+            scopes=settings.auth_required_scopes,
+        )
+
+    if settings.auth_mode != "oauth":
+        raise RuntimeError("Token verifier requested while authentication is disabled.")
     if not settings.auth_issuer_url or not settings.auth_jwks_uri or not settings.auth_audience:
         raise RuntimeError("Auth is enabled but AUTH_ISSUER_URL/AUTH_JWKS_URI/AUTH_AUDIENCE is missing.")
     return JwtTokenVerifier(

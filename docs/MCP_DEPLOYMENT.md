@@ -13,6 +13,7 @@ This guide walks through the MCP server that was added in this repo and how to d
   - `search_business_summaries`
   - `get_symbol_news`
   - `update_event_summary`
+  - `update_current_event_summary`
   - `update_new_ep_event_summary`
   - `create_business_analytics_table`
   - `insert_business_analytics_rows`

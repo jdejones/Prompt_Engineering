@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from mcp_news_server.auth import build_auth_settings, build_token_verifier
 from mcp_news_server.config import Settings
@@ -16,6 +18,26 @@ LOGGER = logging.getLogger(__name__)
 
 SETTINGS = Settings.from_env()
 REPOSITORY = NewsRepository.from_settings(SETTINGS)
+def _csv_env(name: str) -> list[str]:
+    """Read a comma-separated environment variable."""
+    return [
+        item.strip()
+        for item in os.getenv(name, "").split(",")
+        if item.strip()
+    ]
+
+
+_ALLOWED_HOSTS = _csv_env("MCP_ALLOWED_HOSTS")
+
+TRANSPORT_SECURITY = (
+    TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_ALLOWED_HOSTS,
+        allowed_origins=_csv_env("MCP_ALLOWED_ORIGINS"),
+    )
+    if _ALLOWED_HOSTS
+    else None
+)
 
 READ_TOOL_INSTRUCTIONS = """
 This MCP server provides access to stock-news tables in a MySQL schema.
@@ -29,6 +51,7 @@ Use scripts/create_stocks_views.sql for large queries on business summaries by i
 
 WRITE_TOOL_INSTRUCTIONS = """
 Use update_event_summary to update only the event_summary column in stocks.recent_events for a single symbol/date row.
+Use update_current_event_summary to update only the event_summary column in stocks.current_events for a single symbol/date row.
 Use update_new_ep_event_summary to update only the event_summary column in stocks.new_ep for a single symbol row.
 Use create_business_analytics_table, insert_business_analytics_rows, and update_business_analytics_rows
 to write only within the business_analytics schema.
@@ -49,6 +72,7 @@ mcp = FastMCP(
     port=SETTINGS.mcp_port,
     token_verifier=token_verifier,
     auth=auth_settings,
+    transport_security=TRANSPORT_SECURITY,
 )
 
 
@@ -190,6 +214,20 @@ def update_event_summary(symbol: str, date: str, event_summary: str) -> dict[str
     return REPOSITORY.update_event_summary(symbol=symbol, date=date, event_summary=event_summary)
 
 
+def update_current_event_summary(symbol: str, date: str, event_summary: str) -> dict[str, Any]:
+    """
+    Update only the event_summary column in stocks.current_events for one symbol/date row.
+
+    Both `symbol` and `date` are required. `date` must be in YYYY-MM-DD format.
+    The update is refused if the symbol/date pair does not identify exactly one row.
+    """
+    return REPOSITORY.update_current_event_summary(
+        symbol=symbol,
+        date=date,
+        event_summary=event_summary,
+    )
+
+
 def update_new_ep_event_summary(symbol: str, event_summary: str) -> dict[str, Any]:
     """
     Update only the event_summary column in stocks.new_ep for one symbol row.
@@ -250,6 +288,7 @@ def update_business_analytics_rows(
 
 if SETTINGS.write_tools_enabled:
     update_event_summary = mcp.tool()(update_event_summary)
+    update_current_event_summary = mcp.tool()(update_current_event_summary)
     update_new_ep_event_summary = mcp.tool()(update_new_ep_event_summary)
     create_business_analytics_table = mcp.tool()(create_business_analytics_table)
     insert_business_analytics_rows = mcp.tool()(insert_business_analytics_rows)

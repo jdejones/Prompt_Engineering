@@ -53,6 +53,7 @@ SYSTEM_SCHEMAS = {
 
 EVENT_SUMMARY_SCHEMA = "stocks"
 EVENT_SUMMARY_TABLE = "recent_events"
+CURRENT_EVENTS_TABLE = "current_events"
 NEW_EP_SCHEMA = "stocks"
 NEW_EP_TABLE = "new_ep"
 BUSINESS_ANALYTICS_SCHEMA = "business_analytics"
@@ -357,13 +358,37 @@ class NewsRepository:
 
     def update_event_summary(self, symbol: str, date: str, event_summary: str) -> dict[str, Any]:
         """Update event_summary in stocks.recent_events for the single symbol/date row."""
+        return self._update_dated_event_summary(
+            table=EVENT_SUMMARY_TABLE,
+            symbol=symbol,
+            date=date,
+            event_summary=event_summary,
+        )
+
+    def update_current_event_summary(self, symbol: str, date: str, event_summary: str) -> dict[str, Any]:
+        """Update event_summary in stocks.current_events for the single symbol/date row."""
+        return self._update_dated_event_summary(
+            table=CURRENT_EVENTS_TABLE,
+            symbol=symbol,
+            date=date,
+            event_summary=event_summary,
+        )
+
+    def _update_dated_event_summary(
+        self,
+        table: str,
+        symbol: str,
+        date: str,
+        event_summary: str,
+    ) -> dict[str, Any]:
+        """Update event_summary for one symbol/date row in an allowlisted stocks table."""
         normalized_symbol = symbol.strip()
         if not normalized_symbol:
             raise ValueError("symbol must be a non-empty string.")
         self._validate_date(date, field_name="date")
 
         resolved_schema = self.resolve_schema(EVENT_SUMMARY_SCHEMA)
-        resolved_table = self.resolve_table(resolved_schema, EVENT_SUMMARY_TABLE)
+        resolved_table = self.resolve_table(resolved_schema, table)
         symbol_column = self.resolve_column(resolved_schema, resolved_table, "symbol")
         date_column = self.resolve_column(resolved_schema, resolved_table, "date")
         event_summary_column = self.resolve_column(resolved_schema, resolved_table, "event_summary")

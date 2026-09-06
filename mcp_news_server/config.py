@@ -45,7 +45,9 @@ class Settings:
     mcp_port: int
     mcp_transport: str
     mcp_base_url: str | None
+    auth_mode: str
     auth_enabled: bool
+    static_bearer_token: str | None
     write_tools_enabled: bool
 
     mysql_host: str
@@ -82,23 +84,43 @@ class Settings:
         except Exception:
             pass
 
-        auth_enabled = _get_bool("MCP_AUTH_ENABLED", default=False)
+        configured_auth_mode = os.getenv("MCP_AUTH_MODE", "").strip().lower()
+        if configured_auth_mode:
+            if configured_auth_mode not in {"none", "oauth", "static"}:
+                raise RuntimeError("MCP_AUTH_MODE must be 'none', 'oauth', or 'static'.")
+            auth_mode = configured_auth_mode
+        else:
+            auth_mode = "oauth" if _get_bool("MCP_AUTH_ENABLED", default=False) else "none"
+
+        auth_enabled = auth_mode != "none"
 
         base_url = os.getenv("MCP_BASE_URL", "").strip() or None
 
+        static_bearer_token = None
         issuer_url = None
         jwks_uri = None
         audience = None
         required_scopes: list[str] = []
 
         if auth_enabled:
-            issuer_url = _require_env("AUTH_ISSUER_URL")
-            # When auth is enabled, MCP_BASE_URL is required because it's used
-            # as the OAuth resource identifier and for protected resource metadata.
             base_url = _require_env("MCP_BASE_URL")
-            jwks_uri = os.getenv("AUTH_JWKS_URI", "").strip() or f"{issuer_url.rstrip('/')}/.well-known/jwks.json"
             required_scopes = _get_csv("AUTH_REQUIRED_SCOPES", "news.read")
-            audience = os.getenv("AUTH_AUDIENCE", str(base_url))
+
+            if auth_mode == "oauth":
+                issuer_url = _require_env("AUTH_ISSUER_URL")
+                jwks_uri = (
+                    os.getenv("AUTH_JWKS_URI", "").strip()
+                    or f"{issuer_url.rstrip('/')}/.well-known/jwks.json"
+                )
+                audience = os.getenv("AUTH_AUDIENCE", str(base_url))
+            elif auth_mode == "static":
+                static_bearer_token = _require_env("MCP_STATIC_BEARER_TOKEN")
+                if static_bearer_token != static_bearer_token.strip() or any(
+                    character.isspace() for character in static_bearer_token
+                ):
+                    raise RuntimeError("MCP_STATIC_BEARER_TOKEN must not contain whitespace.")
+                if len(static_bearer_token) < 32:
+                    raise RuntimeError("MCP_STATIC_BEARER_TOKEN must be at least 32 characters.")
 
         return cls(
             mcp_name=os.getenv("MCP_SERVER_NAME", "MySQL News MCP"),
@@ -106,7 +128,9 @@ class Settings:
             mcp_port=_get_int("MCP_PORT", 8000),
             mcp_transport=os.getenv("MCP_TRANSPORT", "streamable-http"),
             mcp_base_url=base_url,
+            auth_mode=auth_mode,
             auth_enabled=auth_enabled,
+            static_bearer_token=static_bearer_token,
             write_tools_enabled=_get_bool("MCP_ENABLE_WRITE_TOOLS", default=True),
             mysql_host=os.getenv("MYSQL_HOST", "127.0.0.1"),
             mysql_port=_get_int("MYSQL_PORT", 3306),
