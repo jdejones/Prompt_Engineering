@@ -242,7 +242,8 @@ def upsert_biotech_pipeline(symbol: str, pipeline: str) -> dict[str, Any]:
     """
     Insert or replace one row in healthcare.biotech_pipelines.
 
-    If `symbol` already exists, its `pipeline` value is replaced.
+    If `symbol` already exists, its `pipeline` value is replaced. `updated_on` is
+    automatically set to the database's current datetime.
     """
     return REPOSITORY.upsert_biotech_pipeline(symbol=symbol, pipeline=pipeline)
 

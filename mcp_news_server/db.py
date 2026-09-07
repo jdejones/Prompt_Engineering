@@ -512,11 +512,14 @@ class NewsRepository:
         resolved_table = self.resolve_table(resolved_schema, BIOTECH_PIPELINES_TABLE)
         symbol_column = self.resolve_column(resolved_schema, resolved_table, "symbol")
         pipeline_column = self.resolve_column(resolved_schema, resolved_table, "pipeline")
+        updated_on_column = self.resolve_column(resolved_schema, resolved_table, "updated_on")
         sql = (
             f"INSERT INTO {self._qualified_table(resolved_schema, resolved_table)} "
-            f"(`{self._quote_identifier(symbol_column)}`, `{self._quote_identifier(pipeline_column)}`) "
-            "VALUES (:symbol, :pipeline) "
-            f"ON DUPLICATE KEY UPDATE `{self._quote_identifier(pipeline_column)}` = :pipeline"
+            f"(`{self._quote_identifier(symbol_column)}`, `{self._quote_identifier(pipeline_column)}`, "
+            f"`{self._quote_identifier(updated_on_column)}`) "
+            "VALUES (:symbol, :pipeline, CURRENT_TIMESTAMP) "
+            f"ON DUPLICATE KEY UPDATE `{self._quote_identifier(pipeline_column)}` = :pipeline, "
+            f"`{self._quote_identifier(updated_on_column)}` = CURRENT_TIMESTAMP"
         )
 
         with self.engine.begin() as connection:
