@@ -57,6 +57,8 @@ CURRENT_EVENTS_TABLE = "current_events"
 NEW_EP_SCHEMA = "stocks"
 NEW_EP_TABLE = "new_ep"
 BUSINESS_ANALYTICS_SCHEMA = "business_analytics"
+BIOTECH_PIPELINES_SCHEMA = "healthcare"
+BIOTECH_PIPELINES_TABLE = "biotech_pipelines"
 
 INTEGER_COLUMN_TYPES = {
     "bigint",
@@ -496,6 +498,38 @@ class NewsRepository:
             "symbol_column": symbol_column,
             "updated_column": event_summary_column,
             "rows_updated": result.rowcount,
+        }
+
+    def upsert_biotech_pipeline(self, symbol: str, pipeline: str) -> dict[str, Any]:
+        """Insert a biotech pipeline or replace the pipeline for an existing symbol."""
+        normalized_symbol = symbol.strip().upper()
+        if not normalized_symbol:
+            raise ValueError("symbol must be a non-empty string.")
+        if len(normalized_symbol) > 6:
+            raise ValueError("symbol must be 6 characters or fewer.")
+
+        resolved_schema = self.resolve_schema(BIOTECH_PIPELINES_SCHEMA)
+        resolved_table = self.resolve_table(resolved_schema, BIOTECH_PIPELINES_TABLE)
+        symbol_column = self.resolve_column(resolved_schema, resolved_table, "symbol")
+        pipeline_column = self.resolve_column(resolved_schema, resolved_table, "pipeline")
+        sql = (
+            f"INSERT INTO {self._qualified_table(resolved_schema, resolved_table)} "
+            f"(`{self._quote_identifier(symbol_column)}`, `{self._quote_identifier(pipeline_column)}`) "
+            "VALUES (:symbol, :pipeline) "
+            f"ON DUPLICATE KEY UPDATE `{self._quote_identifier(pipeline_column)}` = :pipeline"
+        )
+
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text(sql),
+                {"symbol": normalized_symbol, "pipeline": pipeline},
+            )
+
+        return {
+            "schema": resolved_schema,
+            "table": resolved_table,
+            "symbol": normalized_symbol,
+            "rows_affected": result.rowcount,
         }
 
     def create_business_analytics_table(

@@ -53,6 +53,7 @@ WRITE_TOOL_INSTRUCTIONS = """
 Use update_event_summary to update only the event_summary column in stocks.recent_events for a single symbol/date row.
 Use update_current_event_summary to update only the event_summary column in stocks.current_events for a single symbol/date row.
 Use update_new_ep_event_summary to update only the event_summary column in stocks.new_ep for a single symbol row.
+Use upsert_biotech_pipeline to insert or replace one symbol's pipeline in healthcare.biotech_pipelines.
 Use create_business_analytics_table, insert_business_analytics_rows, and update_business_analytics_rows
 to write only within the business_analytics schema.
 """
@@ -237,6 +238,15 @@ def update_new_ep_event_summary(symbol: str, event_summary: str) -> dict[str, An
     return REPOSITORY.update_new_ep_event_summary(symbol=symbol, event_summary=event_summary)
 
 
+def upsert_biotech_pipeline(symbol: str, pipeline: str) -> dict[str, Any]:
+    """
+    Insert or replace one row in healthcare.biotech_pipelines.
+
+    If `symbol` already exists, its `pipeline` value is replaced.
+    """
+    return REPOSITORY.upsert_biotech_pipeline(symbol=symbol, pipeline=pipeline)
+
+
 def create_business_analytics_table(
     table: str,
     columns: list[dict[str, Any]],
@@ -290,6 +300,7 @@ if SETTINGS.write_tools_enabled:
     update_event_summary = mcp.tool()(update_event_summary)
     update_current_event_summary = mcp.tool()(update_current_event_summary)
     update_new_ep_event_summary = mcp.tool()(update_new_ep_event_summary)
+    upsert_biotech_pipeline = mcp.tool()(upsert_biotech_pipeline)
     create_business_analytics_table = mcp.tool()(create_business_analytics_table)
     insert_business_analytics_rows = mcp.tool()(insert_business_analytics_rows)
     update_business_analytics_rows = mcp.tool()(update_business_analytics_rows)
