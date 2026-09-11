@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from mcp_news_server.auth import build_auth_settings, build_token_verifier
+from mcp_news_server.catalog import DatabaseCatalog
 from mcp_news_server.config import Settings
 from mcp_news_server.db import NewsRepository
 
@@ -18,6 +20,11 @@ LOGGER = logging.getLogger(__name__)
 
 SETTINGS = Settings.from_env()
 REPOSITORY = NewsRepository.from_settings(SETTINGS)
+CATALOG = DatabaseCatalog.from_yaml(
+    Path(__file__).parent / "data" / "database_catalog.yaml"
+)
+
+
 def _csv_env(name: str) -> list[str]:
     """Read a comma-separated environment variable."""
     return [
@@ -43,6 +50,9 @@ READ_TOOL_INSTRUCTIONS = """
 This MCP server provides access to consolidated stock-news data in a MySQL schema.
 Use list_symbols to discover available stock symbols, get_symbol_news
 for direct reads, search for keyword-based discovery, and fetch for full row retrieval by canonical id.
+When a user asks for database-backed information without naming a table, call database_catalog first
+to find the most relevant table and its lookup columns. Do not ask the user for a table name when
+the catalog can identify it.
 Use select_schema_tables to discover schemas and tables when you don't know names ahead of time.
 Use describe_table and query_table for generic reads from other schemas/tables.
 Use search_business_summaries to find stock symbols whose business summary contains a keyword.
@@ -134,6 +144,31 @@ def select_schema_tables(
 def describe_table(schema: str, table: str) -> dict[str, Any]:
     """Describe a schema-qualified table (columns and primary key)."""
     return REPOSITORY.describe_table(schema=schema, table=table)
+
+
+@mcp.tool()
+def database_catalog(query: str, limit: int = 5) -> dict[str, Any]:
+    """
+    Find database tables relevant to a natural-language request.
+
+    Use this before asking the user to name a table. Results describe what each
+    table contains and identify symbol/date lookup columns and important caveats.
+    Only tables visible to the configured MySQL user are returned.
+    """
+
+    def is_available(schema: str, table: str) -> bool:
+        try:
+            REPOSITORY.resolve_table(schema, table)
+        except ValueError:
+            return False
+        return True
+
+    matches = CATALOG.search(query=query, limit=limit, is_available=is_available)
+    return {
+        "query": query,
+        "count": len(matches),
+        "matches": matches,
+    }
 
 
 @mcp.tool()

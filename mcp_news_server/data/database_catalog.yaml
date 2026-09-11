@@ -1,0 +1,482 @@
+version: 1
+
+# This catalog intentionally describes stable, useful tables rather than every
+# ticker-partitioned, dated snapshot, cache, or temporary table in MySQL.
+tables:
+  alerts.definition:
+    description: Named alert definitions and their JSON configuration.
+    aliases: [alert rules, alert definitions, screening alerts]
+    grain: One row per alert name.
+    lookup:
+      name_column: name
+      date_column: date
+    columns:
+      data: JSON payload containing the alert definition or configuration.
+
+  alerts.passed:
+    description: Most recently stored symbols or results that passed each named alert.
+    aliases: [passed alerts, triggered alerts, alert results, matching screens]
+    grain: One stored result per alert name.
+    lookup:
+      name_column: name
+      date_column: date
+    columns:
+      data: JSON payload containing the recorded alert results.
+
+  business_analytics.models:
+    description: Saved LLM-generated or analytical model output associated with stock symbols.
+    aliases: [company models, stock models, analytical models, saved analysis]
+    grain: Model documents associated with a symbol; verify uniqueness before assuming one row per symbol.
+    lookup:
+      symbol_column: symbol
+      date_column: last_update
+
+  daily_ohlcv.daily_symbol_bars:
+    description: Daily stock price and volume bars with a broad set of derived technical indicators.
+    aliases:
+      - daily prices
+      - historical prices
+      - OHLCV
+      - technical indicators
+      - daily bars
+      - moving averages
+      - RSI
+      - MACD
+      - ATR
+    grain: One row per symbol and trading date.
+    lookup:
+      symbol_column: symbol
+      date_column: date
+    columns:
+      open: Daily opening price.
+      high: Daily high price.
+      low: Daily low price.
+      close: Daily closing price.
+      volume: Daily share volume.
+      vwap: Daily volume-weighted average price.
+      rvol: Relative volume.
+      dollar_volume: Daily traded dollar volume.
+      atr_14: Fourteen-period average true range.
+      rsi_14: Fourteen-period relative strength index.
+    warnings:
+      - This is a wide feature table; request only the columns needed.
+
+  daily_ohlcv.daily_symbol_avwap:
+    description: Daily anchored VWAP values and distance from anchored VWAP, measured in ATRs.
+    aliases: [anchored VWAP, AVWAP, anchored volume weighted average price]
+    grain: One row per symbol, trading date, and anchor date.
+    lookup:
+      symbol_column: symbol
+      date_column: date
+      anchor_column: anchor_date
+
+  daily_ohlcv.historical_swings:
+    description: Latest stored sequence of historical swing highs and lows for each stock symbol.
+    aliases: [swing highs, swing lows, price swings, support resistance pivots]
+    grain: One row per symbol containing ordered Hi/Lo swing levels.
+    lookup:
+      symbol_column: symbol
+      date_column: date
+
+  dilution_tracker.candidate_filings:
+    description: SEC filings identified as candidates for review because they contain possible dilution-related language.
+    aliases: [dilution filings, financing filings, candidate SEC filings, dilution review queue]
+    grain: One candidate filing match per candidate key.
+    lookup:
+      symbol_column: symbol
+      date_column: filed_at
+      filing_column: accession_no
+    warnings:
+      - A candidate match is not a confirmed dilution event; inspect parse_status, keywords, and snippet.
+
+  dilution_tracker.collection_runs:
+    description: Operational history and row counts for dilution-data collection runs.
+    aliases: [dilution collection status, dilution pipeline runs, ingestion runs]
+    grain: One row per collection run key and symbol/date window.
+    lookup:
+      symbol_column: symbol
+      start_date_column: window_start
+      end_date_column: window_end
+    warnings:
+      - This is pipeline-operational metadata, not investment data.
+
+  dilution_tracker.potential_dilution_events:
+    description: Structured potential share-dilution events extracted from SEC filings, including quantities, amounts, security type, confidence, and source snippets.
+    aliases:
+      - potential dilution
+      - warrants
+      - convertibles
+      - registered shares
+      - financing dilution
+      - dilution events
+    grain: One extracted potential dilution event per event key.
+    lookup:
+      symbol_column: symbol
+      date_column: filed_at
+      filing_column: accession_no
+    warnings:
+      - Events are potential rather than necessarily completed dilution; use confidence and source evidence.
+
+  dilution_tracker.share_count_history:
+    description: Historical reported shares outstanding by company, share class, and reporting period, with calculated dilution changes.
+    aliases: [shares outstanding history, share count, actual dilution, historical dilution]
+    grain: One reported share-count record per record key.
+    lookup:
+      symbol_column: symbol
+      date_column: period
+    columns:
+      actual_dilution_pct: Calculated change in shares outstanding for the applicable comparison.
+
+  dilution_tracker.symbol_dilution_snapshots:
+    description: Symbol-level dilution summary snapshots combining actual share-count changes and potential dilution securities over a date window.
+    aliases: [dilution snapshot, dilution risk, potential dilution percent, warrants and convertibles summary]
+    grain: One symbol and analysis-window snapshot per snapshot key.
+    lookup:
+      symbol_column: symbol
+      date_column: snapshot_at
+    warnings:
+      - Potential dilution measures represent possible issuance and should not be treated as completed issuance.
+
+  executive_compensation.compensation_records:
+    description: Annual named-executive compensation records extracted from company filings, including salary, bonuses, equity awards, other compensation, and total compensation.
+    aliases: [executive pay, CEO compensation, officer compensation, executive salary, stock awards]
+    grain: One executive, company, and compensation year per record key.
+    lookup:
+      symbol_column: ticker
+      date_column: year
+
+  filings._10k:
+    description: Company business-description text extracted from annual Form 10-K filings.
+    aliases: [10-K business description, annual filing business, company business filing]
+    grain: One stored business description per symbol.
+    lookup:
+      symbol_column: symbol
+    columns:
+      business: Business-description narrative from the filing.
+
+  form13f.cover_pages:
+    description: SEC Form 13F filing-level metadata for institutional investment managers, reporting periods, filing totals, and signer information.
+    aliases: [13F filings, institutional manager filings, institutional holdings reports, 13F cover page]
+    grain: One filing cover page per SEC accession number.
+    lookup:
+      manager_column: cik
+      date_column: period_of_report
+      filing_column: accession_no
+    warnings:
+      - period_of_report is the holdings quarter end; filed_at is the later submission time.
+
+  form13f.holdings:
+    description: Security-level positions reported by institutional investment managers in SEC Form 13F filings.
+    aliases:
+      - institutional ownership
+      - institutional holdings
+      - fund holdings
+      - 13F positions
+      - investment manager positions
+    grain: One reported security line per accession number and line number.
+    lookup:
+      symbol_column: ticker
+      manager_column: cik
+      date_column: period_of_report
+      filing_column: accession_no
+    columns:
+      value: Reported position value; confirm the source filing's unit convention before interpreting as dollars.
+      ssh_prnamt: Reported shares or principal amount.
+      put_call: Option classification when the reported position is a put or call.
+    relationships:
+      - Join accession_no to form13f.cover_pages.accession_no for filing-manager metadata.
+    warnings:
+      - Holdings are quarter-end snapshots and can be filed weeks later.
+      - Absence from a filing does not establish the exact date a position was sold.
+
+  form4.filings:
+    description: SEC Form 4 filing-level metadata describing issuers, reporting owners, insider roles, signatures, and filing remarks.
+    aliases: [Form 4 filings, insider filings, insider ownership reports]
+    grain: One Form 4 filing per SEC accession number.
+    lookup:
+      symbol_column: issuer_trading_symbol
+      owner_column: reporting_owner_name
+      date_column: filed_at
+      filing_column: accession_no
+
+  form4.non_derivative_transactions:
+    description: Non-derivative insider stock transactions reported on SEC Form 4, including transaction code, shares, price, value, and post-transaction ownership.
+    aliases:
+      - insider trading
+      - insider purchases
+      - insider sales
+      - Form 4 transactions
+      - executive stock transactions
+    grain: One reported transaction line per accession number and line number.
+    lookup:
+      symbol_column: issuer_trading_symbol
+      owner_column: reporting_owner_name
+      date_column: transaction_date
+      filing_column: accession_no
+    relationships:
+      - Join accession_no to form4.filings.accession_no for filing-level details.
+    warnings:
+      - Transaction codes and acquired/disposed indicators must be interpreted together.
+      - Not every reported transaction is an open-market purchase or sale.
+
+  news.stock_news:
+    description: Consolidated stock-news articles with ticker, headline, source, publication time, URL, and category.
+    aliases: [stock news, company news, market news, news articles, headlines]
+    grain: One news article per id, deduplicated in part by article_hash.
+    lookup:
+      symbol_column: Ticker
+      date_column: Date
+    preferred_tools: [get_symbol_news, search, fetch]
+
+  news.data_centers:
+    description: News headlines and links specifically collected for the data-center industry theme.
+    aliases: [data center news, datacenter headlines, AI infrastructure news]
+    grain: One collected headline/link per id.
+    lookup:
+      date_column: saved_date
+
+  stocks.biotech_targets:
+    description: Biopharmaceutical development targets or therapeutic focus labels associated with each stock symbol, stored as JSON.
+    aliases: [biotech targets, drug targets, therapeutic targets, disease areas, oncology companies]
+    grain: One JSON target list per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.current_events:
+    description: Current notable stock events with an event summary and aggregated supporting news.
+    aliases: [current stock events, recent catalysts, current catalysts, company events]
+    grain: One current event record per symbol and date.
+    lookup:
+      symbol_column: symbol
+      date_column: date
+
+  stocks.daily_quant_rating:
+    description: Wide historical matrix of daily quantitative ratings, with symbols or entities in the index column and trading dates represented as columns.
+    aliases: [quant rating history, quantitative ratings, daily stock ratings]
+    grain: One row per index value with one rating column per trading date.
+    lookup:
+      symbol_column: index
+    warnings:
+      - This legacy wide table uses dates as column names; request only specific date columns.
+
+  stocks.elevated_rvol:
+    description: Current stock screen containing symbols with elevated relative volume.
+    aliases: [high relative volume, elevated volume, unusual volume, RVOL screen]
+    grain: One current screened row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.ep_59ema_cross_below_vwap:
+    description: Current episodic-pivot screen for symbols whose 5/9 EMA relationship crosses below VWAP, with relative volume and quantitative rating.
+    aliases: [episodic pivot EMA cross, EP below VWAP, 5 9 EMA cross]
+    grain: One current screened row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.ep_continuation:
+    description: Current screen of episodic-pivot continuation candidates with relative volume and quantitative rating.
+    aliases: [episodic pivot continuation, EP continuation stocks]
+    grain: One current screened row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.ep_rvol:
+    description: Current episodic-pivot candidate screen with relative-volume values.
+    aliases: [episodic pivot relative volume, EP RVOL, episodic pivot candidates]
+    grain: One current screened row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.finviz_symbol_themes:
+    description: Finviz-derived market themes and subthemes assigned to stock symbols.
+    aliases: [stock themes, company themes, investment themes, thematic stocks]
+    grain: One stored theme/subtheme payload per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.finviz_themes:
+    description: Reference list of Finviz-derived themes and subthemes with their corresponding screener filter values and labels.
+    aliases: [theme taxonomy, investment theme filters, Finviz themes]
+    grain: One theme/subtheme mapping per row.
+
+  stocks.high_short_interest_in_play:
+    description: Current stock screen combining high short interest with relative volume and quantitative rating.
+    aliases: [high short interest, short squeeze candidates, heavily shorted stocks, short interest screen]
+    grain: One current screened row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.latest_earnings_filings:
+    description: Latest known annual and quarterly earnings filing dates, reporting periods, and links for each stock symbol.
+    aliases: [latest 10-K, latest 10-Q, earnings filings, SEC filing links, annual quarterly filings]
+    grain: One latest-filing summary per symbol.
+    lookup:
+      symbol_column: symbol
+      date_column: filed_at
+
+  stocks.new_ep:
+    description: Newly identified episodic-pivot candidates with quantitative rating, event summary, and aggregated supporting news.
+    aliases: [new episodic pivots, new EP stocks, new stock catalysts]
+    grain: One current candidate row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.nhod:
+    description: Current screen of stocks making a new high of day, with relative volume and quantitative rating.
+    aliases: [new high of day, NHOD, intraday highs]
+    grain: One current screened row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.nlod:
+    description: Current screen of stocks making a new low of day, with relative volume and quantitative rating.
+    aliases: [new low of day, NLOD, intraday lows]
+    grain: One current screened row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.recent_events:
+    description: Historical recent stock events, price changes, event classifications, summaries, and aggregated supporting news.
+    aliases: [recent stock events, stock catalysts, historical catalysts, event summaries, news events]
+    grain: One event record per symbol and date.
+    lookup:
+      symbol_column: symbol
+      date_column: date
+    columns:
+      concurrent_event: Event classification associated with the same date.
+      prior_event: Relevant preceding-event classification.
+
+  stocks.sa_analysts_price_targets_data:
+    description: Seeking Alpha analyst-consensus price-target history by symbol, stored as JSON with average, low, and high targets and effective timestamps.
+    aliases:
+      - price targets
+      - analyst targets
+      - analyst price estimates
+      - Wall Street price target
+      - consensus target price
+    grain: One JSON price-target history document per symbol.
+    lookup:
+      symbol_column: symbol
+    columns:
+      analysts_price_targets_data: JSON containing target_price, target_price_low, target_price_high, data values, and effective dates.
+    warnings:
+      - The JSON contains time-series observations rather than one scalar target.
+
+  stocks.sa_earnings_data:
+    description: Seeking Alpha earnings estimates and reported results by symbol and fiscal period, stored as nested JSON.
+    aliases:
+      - earnings estimates
+      - earnings history
+      - EPS estimates
+      - revenue estimates
+      - reported earnings
+    grain: One JSON earnings document per symbol.
+    lookup:
+      symbol_column: symbol
+    warnings:
+      - Fiscal and calendar periods can differ; use the period metadata in the JSON.
+
+  stocks.sa_earnings_revisions_data:
+    description: Seeking Alpha earnings-estimate revision trends by symbol and fiscal period, stored as nested JSON.
+    aliases:
+      - earnings revisions
+      - estimate revisions
+      - EPS revisions
+      - analyst revisions
+      - upward downward revisions
+    grain: One JSON earnings-revisions document per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.sa_key_data:
+    description: Seeking Alpha key company, valuation, growth, profitability, and market statistics by symbol, stored as JSON.
+    aliases: [key stock data, company metrics, valuation metrics, fundamental metrics, Seeking Alpha fundamentals]
+    grain: One JSON key-data document per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.sa_meta_data:
+    description: Seeking Alpha company and security metadata by symbol, stored as JSON.
+    aliases: [company metadata, stock metadata, Seeking Alpha metadata, security profile]
+    grain: One JSON metadata document per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.summary:
+    description: Latest per-symbol market and technical snapshot including OHLCV, relative volume, dollar volume, ATR, RSI, directional movement, ADX, MACD, and episodic-pivot fields.
+    aliases:
+      - stock summary
+      - latest stock price
+      - current technical indicators
+      - market snapshot
+      - technical snapshot
+    grain: One latest summary row per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.symbol_business_summary:
+    description: Plain-language company business summaries indexed by stock symbol.
+    aliases: [company description, business summary, what company does, company profile]
+    grain: One business summary per symbol.
+    lookup:
+      symbol_column: symbol
+    preferred_tools: [search_business_summaries, query_table]
+
+  stocks.symbol_headquarters:
+    description: Company headquarters location associated with each stock symbol.
+    aliases: [company headquarters, company location, corporate headquarters, where company is based]
+    grain: One headquarters value per symbol.
+    lookup:
+      symbol_column: symbol
+
+  stocks.symbol_sector_industry:
+    description: Sector and industry classification for each stock symbol.
+    aliases: [stock sector, company industry, industry classification, sector classification, biotechnology stocks]
+    grain: One sector/industry classification per symbol.
+    lookup:
+      symbol_column: symbol
+      date_column: updated_at
+    relationships:
+      - Join symbol to stocks.symbol_business_summary.symbol for descriptions.
+
+  stocks.target_action_dates:
+    description: Target-action-date fields and short lookback flags associated with stock tickers.
+    aliases: [target action dates, TAD, recent target actions]
+    grain: One target-action-date summary per ticker.
+    lookup:
+      symbol_column: ticker
+      date_column: tad
+    warnings:
+      - Consult the producing workflow before assigning business meaning beyond the stored TAD fields.
+
+  stocks.vwap_bands:
+    description: Current VWAP and three positive and negative VWAP band levels for each stock symbol.
+    aliases: [VWAP bands, volume weighted average price bands, intraday price bands]
+    grain: One current VWAP-band snapshot per symbol.
+    lookup:
+      symbol_column: symbol
+
+  healthcare.biotech_pipelines:
+    description: Company drug-development pipeline summaries associated with biotechnology stock symbols.
+    aliases: [biotech pipeline, drug pipeline, clinical pipeline, clinical trials, development programs]
+    grain: One pipeline document per symbol.
+    lookup:
+      symbol_column: symbol
+      date_column: updated_on
+    warnings:
+      - Availability depends on whether the connected database instance contains the healthcare schema.
+
+  xbrl_tags.item_tags:
+    description: Reference mappings of candidate XBRL tags for common financial-statement line items such as revenue, margin, EPS, assets, liabilities, and cash flows.
+    aliases: [XBRL item tags, financial statement tags, SEC accounting tags, revenue XBRL tags]
+    grain: Configuration-style lists grouped by canonical financial item.
+
+  xbrl_tags.statement_item_links:
+    description: Reference mappings linking financial-statement types to their expected statement line items.
+    aliases: [financial statement item mapping, balance sheet items, income statement items, cash flow items]
+    grain: Configuration-style lists grouped by statement type.
+
+  xbrl_tags.statement_tags:
+    description: Reference mappings of XBRL tags used to identify balance sheets, income statements, and cash-flow statements.
+    aliases: [XBRL statement tags, SEC statement mapping, financial statement taxonomy]
+    grain: Configuration-style lists grouped by statement type.

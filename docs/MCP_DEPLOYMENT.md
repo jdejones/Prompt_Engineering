@@ -7,6 +7,7 @@ This guide walks through the MCP server that was added in this repo and how to d
 - MCP server in `mcp_news_server/` with read tools and optional scoped write tools:
   - `health`
   - `list_symbols`
+  - `database_catalog`
   - `select_schema_tables`
   - `describe_table`
   - `query_table`
@@ -35,6 +36,25 @@ This guide walks through the MCP server that was added in this repo and how to d
 - VPS deployment templates:
   - `deploy/mcp-news.service`
   - `deploy/nginx-mcp-news.conf`
+
+## Database catalog
+
+The MCP includes a small semantic table catalog at
+`mcp_news_server/data/database_catalog.yaml`. It describes stable, useful
+tables in plain language and supplies aliases, table grain, lookup columns,
+relationships, and warnings where useful.
+
+When a user asks for database-backed information without naming a table, the
+server instructions direct the model to call `database_catalog(query)` first.
+The tool performs local keyword matching and returns only catalog entries for
+tables visible to the configured MySQL user. It does not query or sample table
+rows.
+
+To add a table, add a `schema.table` entry with at least a `description`.
+Aliases should include the natural phrases users are likely to say. Do not add
+dated snapshots, temporary tables, or one entry per ticker unless they are
+genuinely useful discovery targets. Catalog changes deploy with the application
+and require an MCP process restart.
 
 ## 1) Local project setup
 
