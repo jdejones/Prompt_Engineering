@@ -40,8 +40,8 @@ TRANSPORT_SECURITY = (
 )
 
 READ_TOOL_INSTRUCTIONS = """
-This MCP server provides access to stock-news tables in a MySQL schema.
-Use list_symbols to discover available stock specific news tables, get_symbol_news 
+This MCP server provides access to consolidated stock-news data in a MySQL schema.
+Use list_symbols to discover available stock symbols, get_symbol_news
 for direct reads, search for keyword-based discovery, and fetch for full row retrieval by canonical id.
 Use select_schema_tables to discover schemas and tables when you don't know names ahead of time.
 Use describe_table and query_table for generic reads from other schemas/tables.
@@ -85,7 +85,7 @@ def health() -> dict[str, str]:
 
 @mcp.tool()
 def list_symbols(limit: int = 500) -> dict[str, Any]:
-    """List valid symbol table names from the configured MySQL schema."""
+    """List valid stock symbols from the configured MySQL news table."""
     symbols = REPOSITORY.list_symbols(limit=limit)
     return {"symbols": symbols, "count": len(symbols)}
 
@@ -199,7 +199,7 @@ def search_business_summaries(
 
 @mcp.tool()
 def get_symbol_news(symbol: str, date_from: str | None = None, limit: int = 50) -> dict[str, Any]:
-    """Read rows from one symbol table, optionally filtering by start date."""
+    """Read rows for one stock symbol, optionally filtering by start date."""
     rows = REPOSITORY.get_symbol_news(symbol=symbol, date_from=date_from, limit=limit)
     resolved_symbol = rows[0]["symbol"] if rows else symbol
     return {"symbol": resolved_symbol, "count": len(rows), "rows": rows}
@@ -315,7 +315,7 @@ def search(
     limit: int = 50,
 ) -> dict[str, Any]:
     """
-    Search text-like columns across symbol tables.
+    Search text-like columns in consolidated stock-news data.
 
     This returns `results` in a shape designed for ChatGPT research workflows.
     """

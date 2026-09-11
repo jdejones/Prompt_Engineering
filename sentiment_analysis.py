@@ -2,7 +2,7 @@ import sys
 import os
 import gzip
 import pickle
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from api_keys import database, huggingface
 from typing import Dict
 import pandas as pd
@@ -43,8 +43,15 @@ class SentimentAnalysis:
 
         act_vol_bullish_news = {}
         for sym in act_vol_bullish:
-            query = f"SELECT * FROM {sym} WHERE date >= '{date} 00:00:00'"
-            df = pd.read_sql_query(query, con=self.engine)
+            query = text(
+                "SELECT * FROM news.stock_news "
+                "WHERE `Ticker` = :symbol AND `Date` >= :date"
+            )
+            df = pd.read_sql_query(
+                query,
+                con=self.engine,
+                params={"symbol": sym, "date": f"{date} 00:00:00"},
+            )
             if not df.empty:
                 act_vol_bullish_news[sym] = df
 
@@ -115,8 +122,15 @@ class SentimentAnalysis:
 
         act_vol_bearish_news = {}
         for sym in act_vol_bearish:
-            query = f"SELECT * FROM {sym} WHERE date >= '{date} 00:00:00'"
-            df = pd.read_sql_query(query, con=self.engine)
+            query = text(
+                "SELECT * FROM news.stock_news "
+                "WHERE `Ticker` = :symbol AND `Date` >= :date"
+            )
+            df = pd.read_sql_query(
+                query,
+                con=self.engine,
+                params={"symbol": sym, "date": f"{date} 00:00:00"},
+            )
             if not df.empty:
                 act_vol_bearish_news[sym] = df
 

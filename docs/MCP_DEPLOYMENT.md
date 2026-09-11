@@ -213,7 +213,7 @@ ngrok http 8000
 2. Add your remote MCP server URL.
 3. Complete OAuth linking flow.
 4. In a chat using reasoning/agents mode, test tool usage:
-   - "List available stock symbol tables."
+   - "List available stock symbols."
    - "For AAPL, fetch today's news and summarize likely price impact."
    - "Search for news about guidance cuts from today and fetch top 5 items."
 
@@ -238,7 +238,7 @@ After that, use the MCP tool:
 - `mcp-news` systemd service is active after reboot.
 - HTTPS endpoint is reachable externally.
 - OAuth link succeeds from ChatGPT.
-- `list_symbols` returns expected stock tables.
+- `list_symbols` returns expected stock symbols from `news.stock_news`.
 - `get_symbol_news(symbol='AAPL', date_from='YYYY-MM-DD')` returns rows.
 - `search` + `fetch` returns citations/data consistent with MySQL rows.
 - Daily export/import logs show successful completion.
@@ -257,7 +257,7 @@ python scripts/test_mcp_with_openai.py
   - verify `AUTH_ISSUER_URL`, `AUTH_AUDIENCE`, and scope mapping
   - verify JWKS URL is reachable from VPS
 - Empty `search` results:
-  - confirm text columns exist in symbol tables
+  - confirm expected rows and text columns exist in `news.stock_news`
   - confirm `date_from` format is `YYYY-MM-DD`
 - `fetch` failures:
   - ensure table has a primary key column

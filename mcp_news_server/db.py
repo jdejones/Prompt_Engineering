@@ -1,4 +1,4 @@
-"""MySQL query layer for symbol-table news data and safe schema-qualified reads."""
+"""MySQL query layer for consolidated stock news data and safe schema-qualified reads."""
 
 from __future__ import annotations
 
@@ -51,6 +51,8 @@ SYSTEM_SCHEMAS = {
     "sys",
 }
 
+STOCK_NEWS_TABLE = "stock_news"
+STOCK_NEWS_SYMBOL_COLUMN = "Ticker"
 EVENT_SUMMARY_SCHEMA = "stocks"
 EVENT_SUMMARY_TABLE = "recent_events"
 CURRENT_EVENTS_TABLE = "current_events"
@@ -83,7 +85,7 @@ SIMPLE_COLUMN_TYPES = {
 
 
 class NewsRepository:
-    """Repository for read-only queries across symbol-named MySQL tables."""
+    """Repository for stock-news queries and safe schema-qualified table access."""
 
     def __init__(
         self,
@@ -270,7 +272,10 @@ class NewsRepository:
             sql = f"{sql} ORDER BY `{self._quote_identifier(order_column)}` {direction}"
 
         sql = f"{sql} LIMIT :limit OFFSET :offset"
-        return self._query(sql, query_params)
+        rows = self._query(sql, query_params)
+        if resolved_schema == self.schema and resolved_table == STOCK_NEWS_TABLE:
+            return [self._json_safe_row(row) for row in rows]
+        return rows
 
     def search_business_summaries(
         self,
@@ -339,24 +344,27 @@ class NewsRepository:
         normalized_symbol = self._validate_symbol(symbol)
         row_limit = self._safe_limit(limit)
         date_column = self._resolve_date_column(normalized_symbol)
-        query_params: dict[str, Any] = {"limit": row_limit}
+        query_params: dict[str, Any] = {
+            "symbol": normalized_symbol,
+            "limit": row_limit,
+        }
 
-        where_clause = ""
+        where_clause = f" WHERE `{self._quote_identifier(STOCK_NEWS_SYMBOL_COLUMN)}` = :symbol"
         order_clause = ""
         if date_from and date_column:
             self._validate_date(date_from)
-            where_clause = f" WHERE `{self._quote_identifier(date_column)}` >= :date_from"
+            where_clause = f"{where_clause} AND `{self._quote_identifier(date_column)}` >= :date_from"
             query_params["date_from"] = f"{date_from} 00:00:00"
             order_clause = f" ORDER BY `{self._quote_identifier(date_column)}` DESC"
         elif date_column:
             order_clause = f" ORDER BY `{self._quote_identifier(date_column)}` DESC"
 
         sql = (
-            f"SELECT * FROM {self._qualified_table(self.schema, normalized_symbol)}"
+            f"SELECT * FROM {self._qualified_table(self.schema, STOCK_NEWS_TABLE)}"
             f"{where_clause}{order_clause} LIMIT :limit"
         )
         rows = self._query(sql, query_params)
-        return [self._augment_row(normalized_symbol, row) for row in rows]
+        return [self._augment_row(normalized_symbol, self._json_safe_row(row)) for row in rows]
 
     def update_event_summary(self, symbol: str, date: str, event_summary: str) -> dict[str, Any]:
         """Update event_summary in stocks.recent_events for the single symbol/date row."""
@@ -745,8 +753,14 @@ class NewsRepository:
 
             date_column = self._resolve_date_column(symbol)
             text_clauses = [f"`{self._quote_identifier(column)}` LIKE :pattern" for column in search_columns]
-            query_params: dict[str, Any] = {"pattern": f"%{cleaned_query}%"}
-            where_sql = f"({' OR '.join(text_clauses)})"
+            query_params: dict[str, Any] = {
+                "symbol": symbol,
+                "pattern": f"%{cleaned_query}%",
+            }
+            where_sql = (
+                f"`{self._quote_identifier(STOCK_NEWS_SYMBOL_COLUMN)}` = :symbol "
+                f"AND ({' OR '.join(text_clauses)})"
+            )
 
             if date_from and date_column:
                 where_sql = f"{where_sql} AND `{self._quote_identifier(date_column)}` >= :date_from"
@@ -756,7 +770,7 @@ class NewsRepository:
             query_params["limit"] = table_limit
             order_clause = f" ORDER BY `{self._quote_identifier(date_column)}` DESC" if date_column else ""
             sql = (
-                f"SELECT * FROM {self._qualified_table(self.schema, symbol)} "
+                f"SELECT * FROM {self._qualified_table(self.schema, STOCK_NEWS_TABLE)} "
                 f"WHERE {where_sql}"
                 f"{order_clause} LIMIT :limit"
             )
@@ -775,19 +789,20 @@ class NewsRepository:
         primary_key = self._resolve_primary_key(normalized_symbol)
         if not primary_key:
             raise ValueError(
-                f"Table '{normalized_symbol}' has no primary key. "
+                f"Table '{STOCK_NEWS_TABLE}' has no primary key. "
                 "Use get_symbol_news() to read rows for this symbol."
             )
 
         sql = (
-            f"SELECT * FROM {self._qualified_table(self.schema, normalized_symbol)} "
-            f"WHERE `{self._quote_identifier(primary_key)}` = :pk LIMIT 1"
+            f"SELECT * FROM {self._qualified_table(self.schema, STOCK_NEWS_TABLE)} "
+            f"WHERE `{self._quote_identifier(primary_key)}` = :pk "
+            f"AND `{self._quote_identifier(STOCK_NEWS_SYMBOL_COLUMN)}` = :symbol LIMIT 1"
         )
-        rows = self._query(sql, {"pk": raw_pk})
+        rows = self._query(sql, {"pk": raw_pk, "symbol": normalized_symbol})
         if not rows:
             raise ValueError(f"No row found for id '{identifier}'.")
 
-        row = rows[0]
+        row = self._json_safe_row(rows[0])
         title = self._extract_title(row) or f"{normalized_symbol} news item"
         body = self._extract_body(row)
         return {
@@ -821,7 +836,7 @@ class NewsRepository:
         if fallback:
             return fallback
 
-        raise ValueError(f"Unknown symbol table '{symbol}'.")
+        raise ValueError(f"Unknown stock symbol '{symbol}'.")
 
     def _safe_limit(self, requested: int) -> int:
         if requested <= 0:
@@ -925,14 +940,15 @@ class NewsRepository:
         if self._symbols_cache:
             return
 
-        sql = """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = :schema
-            AND table_type = 'BASE TABLE'
-        """
-        rows = self._query(sql, {"schema": self.schema})
-        self._symbols_cache = {str(self._ci_get(row, "table_name")) for row in rows}
+        symbol_column = self._quote_identifier(STOCK_NEWS_SYMBOL_COLUMN)
+        sql = (
+            f"SELECT DISTINCT `{symbol_column}` AS symbol "
+            f"FROM {self._qualified_table(self.schema, STOCK_NEWS_TABLE)} "
+            f"WHERE `{symbol_column}` IS NOT NULL "
+            f"AND `{symbol_column}` <> ''"
+        )
+        rows = self._query(sql, {})
+        self._symbols_cache = {str(self._ci_get(row, "symbol")) for row in rows}
         self._symbol_lookup_cache = {name.lower(): name for name in self._symbols_cache}
 
     def _refresh_schemas_cache(self) -> None:
@@ -973,7 +989,7 @@ class NewsRepository:
             AND table_name = :table_name
             ORDER BY ordinal_position
         """
-        rows = self._query(sql, {"schema": self.schema, "table_name": symbol})
+        rows = self._query(sql, {"schema": self.schema, "table_name": STOCK_NEWS_TABLE})
         columns = [
             {
                 "column_name": str(self._ci_get(row, "column_name")),
@@ -1065,7 +1081,7 @@ class NewsRepository:
             ORDER BY k.ordinal_position
             LIMIT 1
         """
-        rows = self._query(sql, {"schema": self.schema, "table_name": symbol})
+        rows = self._query(sql, {"schema": self.schema, "table_name": STOCK_NEWS_TABLE})
         primary_key = str(self._ci_get(rows[0], "column_name")) if rows else None
         self._primary_key_cache[symbol] = primary_key
         return primary_key
@@ -1096,6 +1112,13 @@ class NewsRepository:
         with self.engine.connect() as connection:
             result = connection.execute(text(sql), params)
             return [dict(row._mapping) for row in result]
+
+    @staticmethod
+    def _json_safe_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: bytes(value).hex() if isinstance(value, (bytes, bytearray, memoryview)) else value
+            for key, value in row.items()
+        }
 
     @staticmethod
     def _quote_identifier(identifier: str) -> str:
