@@ -66,6 +66,8 @@ Use update_new_ep_event_summary to update only the event_summary column in stock
 Use upsert_biotech_pipeline to insert or replace one symbol's pipeline in healthcare.biotech_pipelines.
 Use create_business_analytics_table, insert_business_analytics_rows, and update_business_analytics_rows
 to write only within the business_analytics schema.
+Use create_trialdata_table, insert_trialdata_rows, and update_trialdata_rows
+to write only within the trialdata schema.
 """
 
 SERVER_INSTRUCTIONS = READ_TOOL_INSTRUCTIONS
@@ -332,6 +334,55 @@ def update_business_analytics_rows(
     )
 
 
+def create_trialdata_table(
+    table: str,
+    columns: list[dict[str, Any]],
+    primary_key: list[str] | None = None,
+    if_not_exists: bool = True,
+) -> dict[str, Any]:
+    """
+    Create a table in trialdata using structured column definitions.
+
+    Column definitions require `name` and `type`. Supported types include integer, bigint,
+    varchar/char with optional `length`, text, decimal with optional precision/scale,
+    float, double, boolean, date, datetime, timestamp, time, and json.
+    """
+    return REPOSITORY.create_trialdata_table(
+        table=table,
+        columns=columns,
+        primary_key=primary_key,
+        if_not_exists=if_not_exists,
+    )
+
+
+def insert_trialdata_rows(table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Insert one or more rows into a trialdata table.
+
+    All rows must use the same column set. Table and column names are validated before insert.
+    """
+    return REPOSITORY.insert_trialdata_rows(table=table, rows=rows)
+
+
+def update_trialdata_rows(
+    table: str,
+    values: dict[str, Any],
+    where: dict[str, Any],
+    limit: int = 100,
+) -> dict[str, Any]:
+    """
+    Update rows in a trialdata table.
+
+    `where` is required and supports equality filters only, plus list values for IN (...).
+    """
+    return REPOSITORY.update_trialdata_rows(
+        table=table,
+        values=values,
+        where=where,
+        limit=limit,
+    )
+
+
 if SETTINGS.write_tools_enabled:
     update_event_summary = mcp.tool()(update_event_summary)
     update_current_event_summary = mcp.tool()(update_current_event_summary)
@@ -340,6 +391,9 @@ if SETTINGS.write_tools_enabled:
     create_business_analytics_table = mcp.tool()(create_business_analytics_table)
     insert_business_analytics_rows = mcp.tool()(insert_business_analytics_rows)
     update_business_analytics_rows = mcp.tool()(update_business_analytics_rows)
+    create_trialdata_table = mcp.tool()(create_trialdata_table)
+    insert_trialdata_rows = mcp.tool()(insert_trialdata_rows)
+    update_trialdata_rows = mcp.tool()(update_trialdata_rows)
 
 
 @mcp.tool()

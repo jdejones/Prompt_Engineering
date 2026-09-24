@@ -59,6 +59,7 @@ CURRENT_EVENTS_TABLE = "current_events"
 NEW_EP_SCHEMA = "stocks"
 NEW_EP_TABLE = "new_ep"
 BUSINESS_ANALYTICS_SCHEMA = "business_analytics"
+TRIALDATA_SCHEMA = "trialdata"
 BIOTECH_PIPELINES_SCHEMA = "healthcare"
 BIOTECH_PIPELINES_TABLE = "biotech_pipelines"
 
@@ -551,7 +552,40 @@ class NewsRepository:
         if_not_exists: bool = True,
     ) -> dict[str, Any]:
         """Create a table in business_analytics from a structured column definition."""
-        resolved_schema = self.resolve_schema(BUSINESS_ANALYTICS_SCHEMA)
+        return self._create_scoped_table(
+            schema=BUSINESS_ANALYTICS_SCHEMA,
+            table=table,
+            columns=columns,
+            primary_key=primary_key,
+            if_not_exists=if_not_exists,
+        )
+
+    def create_trialdata_table(
+        self,
+        table: str,
+        columns: list[dict[str, Any]],
+        primary_key: list[str] | None = None,
+        if_not_exists: bool = True,
+    ) -> dict[str, Any]:
+        """Create a table in trialdata from a structured column definition."""
+        return self._create_scoped_table(
+            schema=TRIALDATA_SCHEMA,
+            table=table,
+            columns=columns,
+            primary_key=primary_key,
+            if_not_exists=if_not_exists,
+        )
+
+    def _create_scoped_table(
+        self,
+        schema: str,
+        table: str,
+        columns: list[dict[str, Any]],
+        primary_key: list[str] | None,
+        if_not_exists: bool,
+    ) -> dict[str, Any]:
+        """Create a table in an explicitly allowlisted schema."""
+        resolved_schema = self.resolve_schema(schema)
         table_name = self._validate_new_identifier(table, "table")
         if not columns:
             raise ValueError("columns must include at least one column definition.")
@@ -630,7 +664,28 @@ class NewsRepository:
 
     def insert_business_analytics_rows(self, table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         """Insert one or more rows into a table in business_analytics."""
-        resolved_schema = self.resolve_schema(BUSINESS_ANALYTICS_SCHEMA)
+        return self._insert_scoped_rows(
+            schema=BUSINESS_ANALYTICS_SCHEMA,
+            table=table,
+            rows=rows,
+        )
+
+    def insert_trialdata_rows(self, table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Insert one or more rows into a table in trialdata."""
+        return self._insert_scoped_rows(
+            schema=TRIALDATA_SCHEMA,
+            table=table,
+            rows=rows,
+        )
+
+    def _insert_scoped_rows(
+        self,
+        schema: str,
+        table: str,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Insert rows into an existing table in an explicitly allowlisted schema."""
+        resolved_schema = self.resolve_schema(schema)
         resolved_table = self.resolve_table(resolved_schema, table)
         if not rows:
             raise ValueError("rows must include at least one row.")
@@ -688,7 +743,40 @@ class NewsRepository:
         limit: int = 100,
     ) -> dict[str, Any]:
         """Update rows in a business_analytics table using equality-only filters."""
-        resolved_schema = self.resolve_schema(BUSINESS_ANALYTICS_SCHEMA)
+        return self._update_scoped_rows(
+            schema=BUSINESS_ANALYTICS_SCHEMA,
+            table=table,
+            values=values,
+            where=where,
+            limit=limit,
+        )
+
+    def update_trialdata_rows(
+        self,
+        table: str,
+        values: dict[str, Any],
+        where: dict[str, Any],
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Update rows in a trialdata table using equality-only filters."""
+        return self._update_scoped_rows(
+            schema=TRIALDATA_SCHEMA,
+            table=table,
+            values=values,
+            where=where,
+            limit=limit,
+        )
+
+    def _update_scoped_rows(
+        self,
+        schema: str,
+        table: str,
+        values: dict[str, Any],
+        where: dict[str, Any],
+        limit: int,
+    ) -> dict[str, Any]:
+        """Update rows in an explicitly allowlisted schema using equality filters."""
+        resolved_schema = self.resolve_schema(schema)
         resolved_table = self.resolve_table(resolved_schema, table)
         if not values:
             raise ValueError("values must include at least one column to update.")

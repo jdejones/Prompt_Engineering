@@ -19,6 +19,9 @@ This guide walks through the MCP server that was added in this repo and how to d
   - `create_business_analytics_table`
   - `insert_business_analytics_rows`
   - `update_business_analytics_rows`
+  - `create_trialdata_table`
+  - `insert_trialdata_rows`
+  - `update_trialdata_rows`
   - `search`
   - `fetch`
 - Query safety controls:
@@ -26,6 +29,8 @@ This guide walks through the MCP server that was added in this repo and how to d
   - parameterized SQL values for filters/search
   - max row limits (`MCP_MAX_ROWS`) and max symbol scan limits (`MCP_MAX_SCAN_SYMBOLS`)
   - business analytics write tools are scoped to `business_analytics.*`
+  - trial-data write tools are scoped to `trialdata.*`, parameterize values, and require
+    equality filters for updates
 - OAuth resource server support:
   - JWT verification via JWKS (`AUTH_JWKS_URI`)
   - issuer/audience/scope checks
